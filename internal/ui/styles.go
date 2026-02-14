@@ -26,5 +26,9 @@ var (
 	BorderStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), true).
 			BorderForeground(lipgloss.Color("240"))
+
+	UnreadItemStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("205")).
+			Bold(true)
 )
 

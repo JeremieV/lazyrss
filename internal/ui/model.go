@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
@@ -24,6 +25,7 @@ const (
 	stateEntries
 	stateReading
 	stateAddingFeed
+	stateHelp
 )
 
 type errMsg error
@@ -48,16 +50,17 @@ type entryItem struct {
 
 func (i entryItem) Title() string {
 	if i.entry.PublishedAt.After(i.feedLastReadAt) {
-		return "● " + i.entry.Title
+		return UnreadItemStyle.Render(i.entry.Title)
 	}
-	return "  " + i.entry.Title
+	return i.entry.Title
 }
 func (i entryItem) Description() string { return i.entry.PublishedAt.Format("2006-01-02 15:04") }
 func (i entryItem) FilterValue() string { return i.entry.Title }
 
 type Model struct {
-	state       state
-	feedsList   list.Model
+	state         state
+	previousState state
+	feedsList     list.Model
 	entriesList list.Model
 	viewport    viewport.Model
 	textInput   textinput.Model
@@ -90,6 +93,12 @@ func NewModel() Model {
 	}
 	m.feedsList.Title = "Feeds"
 	m.feedsList.SetShowStatusBar(false)
+	m.feedsList.AdditionalFullHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		}
+	}
+	m.entriesList.AdditionalFullHelpKeys = m.feedsList.AdditionalFullHelpKeys
 
 	return m
 }
@@ -126,9 +135,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if msg.String() == "?" && m.state != stateHelp && m.state != stateAddingFeed {
+			m.previousState = m.state
+			m.state = stateHelp
+			return m, nil
+		}
+
 		switch m.state {
+		case stateHelp:
+			if msg.String() == "q" || msg.String() == "esc" || msg.String() == "backspace" || msg.String() == "?" {
+				m.state = m.previousState
+				return m, nil
+			}
+
 		case stateFeeds:
 			switch msg.String() {
+			case "alt+up", "alt+k":
+				idx := m.feedsList.Index()
+				if idx > 0 {
+					itemA := m.feedsList.Items()[idx].(feedItem)
+					itemB := m.feedsList.Items()[idx-1].(feedItem)
+					// If they have the same position, ensure they are different before swapping
+					posA, posB := itemA.feed.Position, itemB.feed.Position
+					if posA == posB {
+						posA = idx
+						posB = idx - 1
+					}
+					db.SwapFeedPositions(int(itemA.feed.ID), posA, int(itemB.feed.ID), posB)
+					return m, m.loadFeedsWithIndex(idx - 1)
+				}
+			case "alt+down", "alt+j":
+				idx := m.feedsList.Index()
+				if idx < len(m.feedsList.Items())-1 {
+					itemA := m.feedsList.Items()[idx].(feedItem)
+					itemB := m.feedsList.Items()[idx+1].(feedItem)
+					posA, posB := itemA.feed.Position, itemB.feed.Position
+					if posA == posB {
+						posA = idx
+						posB = idx + 1
+					}
+					db.SwapFeedPositions(int(itemA.feed.ID), posA, int(itemB.feed.ID), posB)
+					return m, m.loadFeedsWithIndex(idx + 1)
+				}
 			case "left":
 				m.feedsList.CursorUp()
 				return m, nil
@@ -240,6 +288,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case feedsMsg:
 		m.feedsList.SetItems(msg.items)
+		if msg.index >= 0 && msg.index < len(msg.items) {
+			m.feedsList.Select(msg.index)
+		}
 		m.loading = false
 
 	case entriesMsg:
@@ -303,13 +354,18 @@ func (m Model) View() string {
 		content = TitleStyle.Render(m.entriesList.SelectedItem().(entryItem).entry.Title) + "\n\n" + m.viewport.View()
 	case stateAddingFeed:
 		content = "Add Feed URL:\n\n" + m.textInput.View() + "\n\n(esc to cancel)"
+	case stateHelp:
+		content = m.helpView()
 	}
 
 	return DocStyle.Render(header + "\n" + content)
 }
 
 // Commands
-type feedsMsg struct{ items []list.Item }
+type feedsMsg struct {
+	items []list.Item
+	index int
+}
 type entriesMsg struct {
 	entries    []db.Entry
 	lastReadAt time.Time
@@ -325,7 +381,18 @@ func (m Model) loadFeeds() tea.Msg {
 	for i, f := range feeds {
 		items[i] = feedItem{feed: f}
 	}
-	return feedsMsg{items}
+	return feedsMsg{items: items, index: -1}
+}
+
+func (m Model) loadFeedsWithIndex(index int) tea.Cmd {
+	return func() tea.Msg {
+		msg := m.loadFeeds()
+		if fMsg, ok := msg.(feedsMsg); ok {
+			fMsg.index = index
+			return fMsg
+		}
+		return msg
+	}
 }
 
 func (m Model) loadEntries(feed db.Feed) tea.Cmd {
@@ -394,6 +461,49 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 		}
 		return contentMsg(out)
 	}
+}
+
+func (m Model) helpView() string {
+	return TitleStyle.Render("Keyboard Shortcuts") + "\n\n" +
+		lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().Width(30).Render(
+				lipgloss.JoinVertical(lipgloss.Left,
+					"General",
+					"  ?       Show/Hide Help",
+					"  q       Quit",
+					"",
+					"Navigation",
+					"  ↑/↓     Move Cursor",
+					"  ←/→     Switch Feed/Article",
+					"  Enter   Select/Open",
+					"  Esc     Go Back",
+				),
+			),
+			lipgloss.NewStyle().Width(30).Render(
+				lipgloss.JoinVertical(lipgloss.Left,
+					"Feeds View",
+					"  alt+↑/↓ Move Feed",
+					"  alt+j/k Move Feed",
+					"  a       Add New Feed",
+					"  d       Delete Feed",
+					"  r       Refresh All",
+					"",
+					"Articles View",
+					"  r       Refresh Current Feed",
+					"  b       Open in Browser",
+				),
+			),
+			lipgloss.NewStyle().Width(30).Render(
+				lipgloss.JoinVertical(lipgloss.Left,
+					"Reading View",
+					"  ←/→     Prev/Next Article",
+					"  b       Open in Browser",
+					"",
+					"Symbols",
+					"  Pink Text   Unread (New items)",
+				),
+			),
+		) + "\n\n(press any key to return)"
 }
 
 func openBrowser(url string) {

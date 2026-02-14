@@ -17,6 +17,7 @@ type Feed struct {
 	CreatedAt   time.Time
 	LastReadAt  time.Time
 	UnreadCount int
+	Position    int
 }
 
 type Entry struct {
@@ -63,11 +64,26 @@ func InitDB() error {
 }
 
 func migrate() error {
-	// Simple migration to add last_read_at if it doesn't exist
-	_, err := database.Exec("ALTER TABLE feeds ADD COLUMN last_read_at DATETIME DEFAULT '1970-01-01 00:00:00'")
-	if err != nil {
-		// Ignore error if column already exists
-		return nil
+	// Migration to add last_read_at
+	_, _ = database.Exec("ALTER TABLE feeds ADD COLUMN last_read_at DATETIME DEFAULT '1970-01-01 00:00:00'")
+	// Migration to add position
+	_, _ = database.Exec("ALTER TABLE feeds ADD COLUMN position INTEGER DEFAULT 0")
+
+	// If all positions are 0, initialize them based on current order
+	var count int
+	database.QueryRow("SELECT COUNT(*) FROM feeds WHERE position != 0").Scan(&count)
+	if count == 0 {
+		rows, err := database.Query("SELECT id FROM feeds ORDER BY title ASC")
+		if err == nil {
+			defer rows.Close()
+			pos := 0
+			for rows.Next() {
+				var id int64
+				rows.Scan(&id)
+				database.Exec("UPDATE feeds SET position = ? WHERE id = ?", pos, id)
+				pos++
+			}
+		}
 	}
 	return nil
 }
@@ -80,7 +96,8 @@ func createTables() error {
 			title TEXT,
 			description TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			last_read_at DATETIME DEFAULT '1970-01-01 00:00:00'
+			last_read_at DATETIME DEFAULT '1970-01-01 00:00:00',
+			position INTEGER DEFAULT 0
 		);`,
 		`CREATE TABLE IF NOT EXISTS entries (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,10 +123,10 @@ func createTables() error {
 
 func GetFeeds() ([]Feed, error) {
 	query := `
-		SELECT f.id, f.url, f.title, f.description, f.created_at, f.last_read_at,
+		SELECT f.id, f.url, f.title, f.description, f.created_at, f.last_read_at, f.position,
 		       (SELECT COUNT(*) FROM entries e WHERE e.feed_id = f.id AND e.published_at > f.last_read_at) as unread_count
 		FROM feeds f 
-		ORDER BY f.title ASC`
+		ORDER BY f.position ASC, f.title ASC`
 	rows, err := database.Query(query)
 	if err != nil {
 		return nil, err
@@ -119,12 +136,30 @@ func GetFeeds() ([]Feed, error) {
 	var feeds []Feed
 	for rows.Next() {
 		var f Feed
-		if err := rows.Scan(&f.ID, &f.URL, &f.Title, &f.Description, &f.CreatedAt, &f.LastReadAt, &f.UnreadCount); err != nil {
+		if err := rows.Scan(&f.ID, &f.URL, &f.Title, &f.Description, &f.CreatedAt, &f.LastReadAt, &f.Position, &f.UnreadCount); err != nil {
 			return nil, err
 		}
 		feeds = append(feeds, f)
 	}
 	return feeds, nil
+}
+
+func SwapFeedPositions(idA, posA, idB, posB int) error {
+	tx, err := database.Begin()
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec("UPDATE feeds SET position = ? WHERE id = ?", posB, idA)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	_, err = tx.Exec("UPDATE feeds SET position = ? WHERE id = ?", posA, idB)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 
 func MarkFeedAsRead(id int64) error {
@@ -133,7 +168,9 @@ func MarkFeedAsRead(id int64) error {
 }
 
 func AddFeed(url, title, desc string) (int64, error) {
-	res, err := database.Exec("INSERT OR IGNORE INTO feeds (url, title, description) VALUES (?, ?, ?)", url, title, desc)
+	var maxPos int
+	database.QueryRow("SELECT COALESCE(MAX(position), -1) FROM feeds").Scan(&maxPos)
+	res, err := database.Exec("INSERT OR IGNORE INTO feeds (url, title, description, position) VALUES (?, ?, ?, ?)", url, title, desc, maxPos+1)
 	if err != nil {
 		return 0, err
 	}
