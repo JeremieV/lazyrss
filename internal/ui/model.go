@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/JohannesKaufmann/html-to-markdown/v2"
 )
 
 type state int
@@ -461,22 +462,31 @@ func (m Model) refreshCurrentFeed() tea.Msg {
 func (m Model) viewEntry(e db.Entry) tea.Cmd {
 	return func() tea.Msg {
 		db.MarkAsRead(e.ID)
-		if m.renderer == nil {
-			return contentMsg(e.Description + "\n\n" + e.Content)
-		}
 
-		desc, _ := m.renderer.Render(e.Description)
-		content, _ := m.renderer.Render(e.Content)
+		// Convert HTML to Markdown for both description and content
+		descMD, _ := htmltomarkdown.ConvertString(e.Description)
+		contentMD, _ := htmltomarkdown.ConvertString(e.Content)
+
+		if m.renderer == nil {
+			return contentMsg(descMD + "\n\n" + contentMD)
+		}
 
 		var out string
-		if desc != "" && desc != "\n" {
-			out += DescriptionReadingStyle.Render(desc)
-		}
-		if content != "" && content != "\n" {
-			if out != "" {
-				out += "\n"
+		if descMD != "" {
+			renderedDesc, _ := m.renderer.Render(descMD)
+			if renderedDesc != "" && renderedDesc != "\n" {
+				out += DescriptionReadingStyle.Render(renderedDesc)
 			}
-			out += content
+		}
+
+		if contentMD != "" && contentMD != descMD {
+			renderedContent, _ := m.renderer.Render(contentMD)
+			if renderedContent != "" && renderedContent != "\n" {
+				if out != "" {
+					out += "\n---\n\n"
+				}
+				out += renderedContent
+			}
 		}
 
 		if out == "" {
