@@ -79,23 +79,25 @@ func NewModel() Model {
 		viewport:    viewport.New(0, 0),
 		textInput:   ti,
 		spinner:     s,
-		loading:     true,
+		loading:     false,
 	}
 	m.feedsList.Title = "Feeds"
 	m.feedsList.SetShowStatusBar(false)
-
-	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(80), // Default width
-	)
-	m.renderer = renderer
 
 	return m
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.loadFeeds, m.spinner.Tick)
+	return tea.Batch(
+		m.loadFeeds,
+		m.spinner.Tick,
+		func() tea.Msg {
+			return backgroundRefreshMsg{}
+		},
+	)
 }
+
+type backgroundRefreshMsg struct{}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -120,6 +122,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.state {
 		case stateFeeds:
 			switch msg.String() {
+			case "left":
+				m.feedsList.CursorUp()
+				return m, nil
+			case "right":
+				m.feedsList.CursorDown()
+				return m, nil
 			case "a":
 				m.state = stateAddingFeed
 				m.textInput.Focus()
@@ -146,6 +154,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case stateEntries:
 			switch msg.String() {
+			case "left":
+				m.feedsList.CursorUp()
+				if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
+					m.currentFeed = i.feed
+					m.loading = true
+					m.entriesList.SetItems([]list.Item{})
+					return m, m.loadEntries(i.feed.ID)
+				}
+			case "right":
+				m.feedsList.CursorDown()
+				if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
+					m.currentFeed = i.feed
+					m.loading = true
+					m.entriesList.SetItems([]list.Item{})
+					return m, m.loadEntries(i.feed.ID)
+				}
 			case "esc", "backspace":
 				m.state = stateFeeds
 				return m, nil
@@ -167,6 +191,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case stateReading:
 			switch msg.String() {
+			case "right":
+				m.entriesList.CursorDown()
+				if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
+					m.loading = true
+					m.viewport.SetContent("Loading next...")
+					return m, m.viewEntry(i.entry)
+				}
+			case "left":
+				m.entriesList.CursorUp()
+				if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
+					m.loading = true
+					m.viewport.SetContent("Loading previous...")
+					return m, m.viewEntry(i.entry)
+				}
 			case "esc", "backspace":
 				m.state = stateEntries
 				return m, nil
@@ -190,6 +228,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.addFeed(url)
 			}
 		}
+
+	case backgroundRefreshMsg:
+		return m, m.refreshAllFeeds
 
 	case feedsMsg:
 		m.feedsList.SetItems(msg.items)
