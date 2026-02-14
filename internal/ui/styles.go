@@ -30,5 +30,10 @@ var (
 	UnreadItemStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("205")).
 			Bold(true)
+
+	DescriptionReadingStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("244")).
+				Italic(true).
+				MarginBottom(1)
 )
 

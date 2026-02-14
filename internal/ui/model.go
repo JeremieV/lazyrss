@@ -462,12 +462,27 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 	return func() tea.Msg {
 		db.MarkAsRead(e.ID)
 		if m.renderer == nil {
-			return contentMsg(e.Content)
+			return contentMsg(e.Description + "\n\n" + e.Content)
 		}
-		out, _ := m.renderer.Render(e.Content)
-		if out == "" || out == "\n" {
-			out, _ = m.renderer.Render(e.Description)
+
+		desc, _ := m.renderer.Render(e.Description)
+		content, _ := m.renderer.Render(e.Content)
+
+		var out string
+		if desc != "" && desc != "\n" {
+			out += DescriptionReadingStyle.Render(desc)
 		}
+		if content != "" && content != "\n" {
+			if out != "" {
+				out += "\n"
+			}
+			out += content
+		}
+
+		if out == "" {
+			out = "No content available."
+		}
+
 		return contentMsg(out)
 	}
 }
