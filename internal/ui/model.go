@@ -135,7 +135,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-		if msg.String() == "?" && m.state != stateHelp && m.state != stateAddingFeed {
+		isFiltering := (m.state == stateFeeds && m.feedsList.FilterState() == list.Filtering) ||
+			(m.state == stateEntries && m.entriesList.FilterState() == list.Filtering)
+
+		if msg.String() == "?" && m.state != stateHelp && m.state != stateAddingFeed && !isFiltering {
 			m.previousState = m.state
 			m.state = stateHelp
 			return m, nil
@@ -149,6 +152,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case stateFeeds:
+			if m.feedsList.FilterState() == list.Filtering {
+				break
+			}
 			switch msg.String() {
 			case "alt+up", "alt+k":
 				idx := m.feedsList.Index()
@@ -208,6 +214,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case stateEntries:
+			if m.entriesList.FilterState() == list.Filtering {
+				break
+			}
 			switch msg.String() {
 			case "left":
 				m.feedsList.CursorUp()
