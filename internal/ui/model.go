@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -31,19 +32,25 @@ type feedItem struct {
 	feed db.Feed
 }
 
-func (i feedItem) Title() string       { return i.feed.Title }
+func (i feedItem) Title() string {
+	if i.feed.UnreadCount > 0 {
+		return fmt.Sprintf("%s (%d)", i.feed.Title, i.feed.UnreadCount)
+	}
+	return i.feed.Title
+}
 func (i feedItem) Description() string { return i.feed.URL }
 func (i feedItem) FilterValue() string { return i.feed.Title }
 
 type entryItem struct {
-	entry db.Entry
+	entry          db.Entry
+	feedLastReadAt time.Time
 }
 
 func (i entryItem) Title() string {
-	if i.entry.Read {
-		return "  " + i.entry.Title
+	if i.entry.PublishedAt.After(i.feedLastReadAt) {
+		return "● " + i.entry.Title
 	}
-	return "● " + i.entry.Title
+	return "  " + i.entry.Title
 }
 func (i entryItem) Description() string { return i.entry.PublishedAt.Format("2006-01-02 15:04") }
 func (i entryItem) FilterValue() string { return i.entry.Title }
@@ -79,7 +86,7 @@ func NewModel() Model {
 		viewport:    viewport.New(0, 0),
 		textInput:   ti,
 		spinner:     s,
-		loading:     false,
+		loading:     true, // Set to true initially so the user sees the spinner immediately
 	}
 	m.feedsList.Title = "Feeds"
 	m.feedsList.SetShowStatusBar(false)
@@ -91,13 +98,9 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.loadFeeds,
 		m.spinner.Tick,
-		func() tea.Msg {
-			return backgroundRefreshMsg{}
-		},
+		m.refreshAllFeeds, // Start background sync directly
 	)
 }
-
-type backgroundRefreshMsg struct{}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -109,14 +112,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.feedsList.SetSize(msg.Width-4, msg.Height-4)
 		m.entriesList.SetSize(msg.Width-4, msg.Height-4)
-		m.viewport = viewport.New(msg.Width-4, msg.Height-4)
+		m.viewport.Width = msg.Width - 4
+		m.viewport.Height = msg.Height - 4
 		m.textInput.Width = msg.Width - 10
 
-		renderer, _ := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
-			glamour.WithWordWrap(msg.Width-10),
-		)
-		m.renderer = renderer
+		// Update renderer with new width, but don't block if it's identical
+		if m.renderer == nil || m.width != msg.Width {
+			r, _ := glamour.NewTermRenderer(
+				glamour.WithAutoStyle(),
+				glamour.WithWordWrap(msg.Width-10),
+			)
+			m.renderer = r
+		}
 
 	case tea.KeyMsg:
 		switch m.state {
@@ -146,7 +153,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = stateEntries
 					m.loading = true
 					m.entriesList.SetItems([]list.Item{}) // Clear previous entries
-					return m, m.loadEntries(i.feed.ID)
+					return m, m.loadEntries(i.feed)
 				}
 			case "q":
 				return m, tea.Quit
@@ -158,21 +165,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.feedsList.CursorUp()
 				if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
 					m.currentFeed = i.feed
+					m.state = stateEntries
 					m.loading = true
 					m.entriesList.SetItems([]list.Item{})
-					return m, m.loadEntries(i.feed.ID)
+					return m, m.loadEntries(i.feed)
 				}
 			case "right":
 				m.feedsList.CursorDown()
 				if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
 					m.currentFeed = i.feed
+					m.state = stateEntries
 					m.loading = true
 					m.entriesList.SetItems([]list.Item{})
-					return m, m.loadEntries(i.feed.ID)
+					return m, m.loadEntries(i.feed)
 				}
 			case "esc", "backspace":
 				m.state = stateFeeds
-				return m, nil
+				return m, m.loadFeeds
 			case "r":
 				m.loading = true
 				return m, m.refreshCurrentFeed
@@ -207,7 +216,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "esc", "backspace":
 				m.state = stateEntries
-				return m, nil
+				return m, tea.Batch(m.loadFeeds, m.loadEntries(m.currentFeed))
 			case "b":
 				if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
 					openBrowser(i.entry.Link)
@@ -229,15 +238,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case backgroundRefreshMsg:
-		return m, m.refreshAllFeeds
-
 	case feedsMsg:
 		m.feedsList.SetItems(msg.items)
 		m.loading = false
 
 	case entriesMsg:
-		m.entriesList.SetItems(msg.items)
+		items := make([]list.Item, len(msg.entries))
+		for i, e := range msg.entries {
+			items[i] = entryItem{entry: e, feedLastReadAt: msg.lastReadAt}
+		}
+		m.entriesList.SetItems(items)
 		m.entriesList.Title = m.currentFeed.Title
 		m.loading = false
 
@@ -300,7 +310,10 @@ func (m Model) View() string {
 
 // Commands
 type feedsMsg struct{ items []list.Item }
-type entriesMsg struct{ items []list.Item }
+type entriesMsg struct {
+	entries    []db.Entry
+	lastReadAt time.Time
+}
 type contentMsg string
 
 func (m Model) loadFeeds() tea.Msg {
@@ -315,17 +328,16 @@ func (m Model) loadFeeds() tea.Msg {
 	return feedsMsg{items}
 }
 
-func (m Model) loadEntries(feedID int64) tea.Cmd {
+func (m Model) loadEntries(feed db.Feed) tea.Cmd {
 	return func() tea.Msg {
-		entries, err := db.GetEntries(feedID)
+		entries, err := db.GetEntries(feed.ID)
 		if err != nil {
 			return errMsg(err)
 		}
-		items := make([]list.Item, len(entries))
-		for i, e := range entries {
-			items[i] = entryItem{entry: e}
-		}
-		return entriesMsg{items}
+		// We capture the LastReadAt BEFORE we update it in the DB
+		lastReadAt := feed.LastReadAt
+		db.MarkFeedAsRead(feed.ID)
+		return entriesMsg{entries: entries, lastReadAt: lastReadAt}
 	}
 }
 
@@ -367,12 +379,15 @@ func (m Model) refreshAllFeeds() tea.Msg {
 
 func (m Model) refreshCurrentFeed() tea.Msg {
 	rss.SyncFeed(m.currentFeed.ID, m.currentFeed.URL)
-	return m.loadEntries(m.currentFeed.ID)()
+	return m.loadEntries(m.currentFeed)()
 }
 
 func (m Model) viewEntry(e db.Entry) tea.Cmd {
 	return func() tea.Msg {
 		db.MarkAsRead(e.ID)
+		if m.renderer == nil {
+			return contentMsg(e.Content)
+		}
 		out, _ := m.renderer.Render(e.Content)
 		if out == "" || out == "\n" {
 			out, _ = m.renderer.Render(e.Description)

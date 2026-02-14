@@ -15,6 +15,8 @@ type Feed struct {
 	Title       string
 	Description string
 	CreatedAt   time.Time
+	LastReadAt  time.Time
+	UnreadCount int
 }
 
 type Entry struct {
@@ -53,7 +55,21 @@ func InitDB() error {
 
 	database = db
 
-	return createTables()
+	if err := createTables(); err != nil {
+		return err
+	}
+
+	return migrate()
+}
+
+func migrate() error {
+	// Simple migration to add last_read_at if it doesn't exist
+	_, err := database.Exec("ALTER TABLE feeds ADD COLUMN last_read_at DATETIME DEFAULT '1970-01-01 00:00:00'")
+	if err != nil {
+		// Ignore error if column already exists
+		return nil
+	}
+	return nil
 }
 
 func createTables() error {
@@ -63,7 +79,8 @@ func createTables() error {
 			url TEXT UNIQUE NOT NULL,
 			title TEXT,
 			description TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			last_read_at DATETIME DEFAULT '1970-01-01 00:00:00'
 		);`,
 		`CREATE TABLE IF NOT EXISTS entries (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,7 +105,12 @@ func createTables() error {
 }
 
 func GetFeeds() ([]Feed, error) {
-	rows, err := database.Query("SELECT id, url, title, description, created_at FROM feeds ORDER BY title ASC")
+	query := `
+		SELECT f.id, f.url, f.title, f.description, f.created_at, f.last_read_at,
+		       (SELECT COUNT(*) FROM entries e WHERE e.feed_id = f.id AND e.published_at > f.last_read_at) as unread_count
+		FROM feeds f 
+		ORDER BY f.title ASC`
+	rows, err := database.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -97,12 +119,17 @@ func GetFeeds() ([]Feed, error) {
 	var feeds []Feed
 	for rows.Next() {
 		var f Feed
-		if err := rows.Scan(&f.ID, &f.URL, &f.Title, &f.Description, &f.CreatedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.URL, &f.Title, &f.Description, &f.CreatedAt, &f.LastReadAt, &f.UnreadCount); err != nil {
 			return nil, err
 		}
 		feeds = append(feeds, f)
 	}
 	return feeds, nil
+}
+
+func MarkFeedAsRead(id int64) error {
+	_, err := database.Exec("UPDATE feeds SET last_read_at = CURRENT_TIMESTAMP WHERE id = ?", id)
+	return err
 }
 
 func AddFeed(url, title, desc string) (int64, error) {
