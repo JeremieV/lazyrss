@@ -21,6 +21,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2"
 )
 
+
 type state int
 
 const (
@@ -162,10 +163,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Height calculation:
 		// msg.Height
 		// - 1 (Status bar)
-		// - 1 (JoinVertical newline)
-		// = msg.Height - 2 for the main view height including borders
-		// Pane height (including list title/pagination) = msg.Height - 2 - 2 (borders) = msg.Height - 4
-		paneHeight := msg.Height - 4
+		// - 2 (Pane borders top+bottom)
+		// = msg.Height - 3 for pane inner content height
+		paneHeight := msg.Height - 3
 
 		m.feedsList.SetSize(feedsWidth, paneHeight)
 		m.entriesList.SetSize(entriesWidth, paneHeight)
@@ -402,7 +402,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		osc8Start := "\x1b]8;;" + m.currentFeed.URL + "\x1b\\"
 		osc8End := "\x1b]8;;\x1b\\"
 		linkedTitle := osc8Start + m.currentFeed.Title + osc8End
-
 		m.entriesList.Title = linkedTitle
 		m.loading = false
 		// Load content for the first entry automatically
@@ -471,7 +470,7 @@ func (m Model) View() string {
 	}
 
 	// Force consistent height and width on all panes
-	h := m.feedsList.Height() + 2 // adjust for the titles we re-enabled
+	h := m.feedsList.Height()
 	if h <= 0 {
 		h = 10 // fallback for initial load
 	}
@@ -631,12 +630,18 @@ func (m Model) renderMarkdown(md string) string {
 		return md
 	}
 
-	// Tokenize links to avoid showing URLs
-	// We'll replace [text](url) with a token, render with glamour, and then replace with OSC 8
-	re := regexp.MustCompile(`\[([^\]]+)\]\(([^\)]+)\)`)
+	// Pre-process: convert linked images [![alt](img-url)](link-url)
+	// into simple images ![alt](link-url) so the main regex can handle them.
+	reLinkedImg := regexp.MustCompile(`\[!\[([^\]]*)\]\([^)]+\)\]\(([^)]+)\)`)
+	md = reLinkedImg.ReplaceAllString(md, "![$1]($2)")
+
+	// Tokenize links and images to avoid showing URLs.
+	// The regex captures: 1: optional '\', 2: optional '!', 3: link text/alt, 4: url
+	re := regexp.MustCompile(`(\\)?(!)?\[([^\]]*)\]\(\s*([^\s\)]+)(?:\s+["'][^"']*["'])?\s*\)`)
 	type linkInfo struct {
-		text string
-		url  string
+		text    string
+		url     string
+		isImage bool
 	}
 	links := make(map[string]linkInfo)
 	tokenCount := 0
@@ -644,12 +649,24 @@ func (m Model) renderMarkdown(md string) string {
 	// Pre-process markdown to replace links with unique tokens
 	processedMD := re.ReplaceAllStringFunc(md, func(match string) string {
 		submatch := re.FindStringSubmatch(match)
-		if len(submatch) < 3 {
+		if len(submatch) < 5 {
 			return match
 		}
-		// Use a token that Glamour won't interpret as Markdown (avoid underscores)
-		token := fmt.Sprintf("GLAMOURURLTOKEN%d", tokenCount)
-		links[token] = linkInfo{text: submatch[1], url: submatch[2]}
+		// Use a token that Glamour won't interpret as Markdown
+		token := fmt.Sprintf("GLAMOURTOKEN%dURL", tokenCount)
+		text := submatch[3]
+		isImage := submatch[2] == "!"
+		if text == "" && isImage {
+			text = "Image"
+		} else if text == "" {
+			text = "Link"
+		}
+
+		links[token] = linkInfo{
+			isImage: isImage,
+			text:    text,
+			url:     submatch[4],
+		}
 		tokenCount++
 		return token
 	})
@@ -662,11 +679,16 @@ func (m Model) renderMarkdown(md string) string {
 
 	// Post-process to insert OSC 8 links
 	for token, info := range links {
+		displayText := info.text
+		if info.isImage {
+			displayText = "[img] " + displayText
+		}
+
 		// Style the link text (blue and underlined)
 		styledText := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("12")).
 			Underline(true).
-			Render(info.text)
+			Render(displayText)
 
 		// Create OSC 8 hyperlink
 		osc8 := fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", info.url, styledText)
