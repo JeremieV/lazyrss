@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -101,7 +102,7 @@ func NewModel() Model {
 	d := list.NewDefaultDelegate()
 	d.ShowDescription = false
 	m.feedsList.SetDelegate(d)
-	m.feedsList.Title = "Feeds"
+	m.feedsList.SetShowTitle(false)
 	m.feedsList.SetShowStatusBar(false)
 	m.feedsList.SetShowHelp(false)
 	m.feedsList.AdditionalFullHelpKeys = func() []key.Binding {
@@ -109,6 +110,7 @@ func NewModel() Model {
 			key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		}
 	}
+	m.entriesList.SetShowTitle(false)
 	m.entriesList.SetShowStatusBar(false)
 	m.entriesList.SetShowHelp(false)
 	m.entriesList.AdditionalFullHelpKeys = m.feedsList.AdditionalFullHelpKeys
@@ -156,8 +158,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// - 1 (Bottom margin)
 		// - 1 (Status bar)
 		// = msg.Height - 3 for the main view height including borders
-		// Internal height for components = msg.Height - 3 - 2 (borders) = msg.Height - 5
-		paneHeight := msg.Height - 5
+		// Internal height for components = msg.Height - 3 - 2 (borders) - 1 (custom header) = msg.Height - 6
+		paneHeight := msg.Height - 6
 
 		m.feedsList.SetSize(feedsWidth, paneHeight)
 		m.entriesList.SetSize(entriesWidth, paneHeight)
@@ -197,10 +199,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "q":
 				return m, tea.Quit
-			case "tab":
+			case "tab", "right":
 				m.activePane = (m.activePane + 1) % 3
 				return m, nil
-			case "shift+tab":
+			case "shift+tab", "left":
 				m.activePane = (m.activePane - 1 + 3) % 3
 				return m, nil
 			case "a":
@@ -467,9 +469,19 @@ func (m Model) View() string {
 	cw := m.viewport.Width
 	if cw <= 0 { cw = 40 }
 
-	feedsView := feedsStyle.Width(fw).Height(h).Render(m.feedsList.View())
-	entriesView := entriesStyle.Width(ew).Height(h).Render(m.entriesList.View())
-	contentView := contentStyle.Width(cw).Height(h).Render(m.viewport.View())
+	// Render custom titles
+	feedsHeader := TitleStyle.Width(fw).Render("Feeds")
+	entriesHeader := TitleStyle.Width(ew).Render(fmt.Sprintf("%s %s", m.currentFeed.Title, m.currentFeed.URL))
+	
+	var contentTitle string
+	if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
+		contentTitle = i.entry.Title
+	}
+	contentHeader := TitleStyle.Width(cw).Render(contentTitle)
+
+	feedsView := feedsStyle.Width(fw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, feedsHeader, m.feedsList.View()))
+	entriesView := entriesStyle.Width(ew).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, entriesHeader, m.entriesList.View()))
+	contentView := contentStyle.Width(cw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, contentHeader, m.viewport.View()))
 
 	mainView := lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)
 
@@ -608,17 +620,11 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 		descMD, _ := htmltomarkdown.ConvertString(e.Description)
 		contentMD, _ := htmltomarkdown.ConvertString(e.Content)
 
-		titleMD := "# " + e.Title + "\n\n"
-		
 		if m.renderer == nil {
-			return contentMsg(titleMD + descMD + "\n\n" + contentMD)
+			return contentMsg(descMD + "\n\n" + contentMD)
 		}
 
 		var out string
-		// Render title first
-		renderedTitle, _ := m.renderer.Render(titleMD)
-		out += renderedTitle
-
 		if descMD != "" {
 			renderedDesc, _ := m.renderer.Render(descMD)
 			if renderedDesc != "" && renderedDesc != "\n" {
@@ -629,6 +635,9 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 		if contentMD != "" && contentMD != descMD {
 			renderedContent, _ := m.renderer.Render(contentMD)
 			if renderedContent != "" && renderedContent != "\n" {
+				if out != "" {
+					out += "\n---\n\n"
+				}
 				out += renderedContent
 			}
 		}
@@ -637,7 +646,7 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 			out = "No content available."
 		}
 
-		return contentMsg(out)
+		return contentMsg(strings.TrimSpace(out))
 	}
 }
 
