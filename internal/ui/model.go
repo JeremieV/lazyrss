@@ -64,7 +64,7 @@ func (i entryItem) Title() string {
 	// Wrap the title text in an OSC 8 hyperlink
 	return "\x1b]8;;" + i.entry.Link + "\x1b\\" + title + "\x1b]8;;\x1b\\"
 }
-func (i entryItem) Description() string { return i.entry.PublishedAt.Format("2006-01-02 15:04") }
+func (i entryItem) Description() string { return "" }
 func (i entryItem) FilterValue() string { return i.entry.Title }
 
 type Model struct {
@@ -117,6 +117,10 @@ func NewModel() Model {
 			key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		}
 	}
+	ed := list.NewDefaultDelegate()
+	ed.ShowDescription = false
+	ed.SetHeight(1)
+	m.entriesList.SetDelegate(ed)
 	m.entriesList.SetShowTitle(true)
 	m.entriesList.SetShowStatusBar(false)
 	m.entriesList.SetShowPagination(true)
