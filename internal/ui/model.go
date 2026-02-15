@@ -488,7 +488,7 @@ func (m Model) View() string {
 		osc8End := "\x1b]8;;\x1b\\"
 		contentTitle = osc8Start + i.entry.Title + osc8End
 	}
-	contentHeader := TitleStyle.PaddingLeft(1).Width(cw).Render(contentTitle)
+	contentHeader := TitleStyle.PaddingLeft(2).Width(cw).Render(contentTitle)
 	contentView := contentStyle.Width(cw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, contentHeader, m.viewport.View()))
 
 	mainView := lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)
@@ -697,22 +697,22 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 	return func() tea.Msg {
 		db.MarkAsRead(e.ID)
 
-		// Build metadata line (published date + link)
-		metaStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-		var metaParts []string
+		// Build metadata (published date + link), each on its own line, indented
+		metaStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).PaddingLeft(2)
+		var metaLines []string
 		if !e.PublishedAt.IsZero() {
-			metaParts = append(metaParts, e.PublishedAt.Format("Mon, 02 Jan 2006 15:04"))
+			metaLines = append(metaLines, metaStyle.Render(e.PublishedAt.Format("Mon, 02 Jan 2006 15:04")))
 		}
 		if e.Link != "" {
 			linkOsc := fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\",
 				e.Link,
 				lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Underline(true).Render(e.Link))
-			metaParts = append(metaParts, linkOsc)
+			metaLines = append(metaLines, metaStyle.Render(linkOsc))
 		}
 
 		var out string
-		if len(metaParts) > 0 {
-			out += metaStyle.Render(strings.Join(metaParts, "  ·  ")) + "\n\n"
+		if len(metaLines) > 0 {
+			out += "\n" + strings.Join(metaLines, "\n") + "\n\n"
 		}
 
 		// Convert HTML to Markdown for both description and content
