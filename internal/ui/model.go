@@ -101,17 +101,21 @@ func NewModel() Model {
 	}
 	d := list.NewDefaultDelegate()
 	d.ShowDescription = false
+	d.SetHeight(1)
 	m.feedsList.SetDelegate(d)
-	m.feedsList.SetShowTitle(false)
+	m.feedsList.Title = "Feeds"
+	m.feedsList.SetShowTitle(true)
 	m.feedsList.SetShowStatusBar(false)
+	m.feedsList.SetShowPagination(true)
 	m.feedsList.SetShowHelp(false)
 	m.feedsList.AdditionalFullHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		}
 	}
-	m.entriesList.SetShowTitle(false)
+	m.entriesList.SetShowTitle(true)
 	m.entriesList.SetShowStatusBar(false)
+	m.entriesList.SetShowPagination(true)
 	m.entriesList.SetShowHelp(false)
 	m.entriesList.AdditionalFullHelpKeys = m.feedsList.AdditionalFullHelpKeys
 
@@ -154,17 +158,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Height calculation:
 		// msg.Height
-		// - 1 (Top margin)
-		// - 1 (Bottom margin)
 		// - 1 (Status bar)
-		// = msg.Height - 3 for the main view height including borders
-		// Internal height for components = msg.Height - 3 - 2 (borders) - 1 (custom header) = msg.Height - 6
-		paneHeight := msg.Height - 6
+		// - 1 (JoinVertical newline)
+		// = msg.Height - 2 for the main view height including borders
+		// Pane height (including list title/pagination) = msg.Height - 2 - 2 (borders) = msg.Height - 4
+		paneHeight := msg.Height - 4
 
 		m.feedsList.SetSize(feedsWidth, paneHeight)
 		m.entriesList.SetSize(entriesWidth, paneHeight)
 		m.viewport.Width = contentWidth
-		m.viewport.Height = paneHeight
+		// Viewport height needs to account for the custom header we render in the View function
+		m.viewport.Height = paneHeight - 1
 		m.textInput.Width = msg.Width - 10
 
 		// Update renderer
@@ -456,7 +460,7 @@ func (m Model) View() string {
 	}
 
 	// Force consistent height and width on all panes
-	h := m.feedsList.Height()
+	h := m.feedsList.Height() + 2 // adjust for the titles we re-enabled
 	if h <= 0 {
 		h = 10 // fallback for initial load
 	}
@@ -469,18 +473,14 @@ func (m Model) View() string {
 	cw := m.viewport.Width
 	if cw <= 0 { cw = 40 }
 
-	// Render custom titles
-	feedsHeader := TitleStyle.Width(fw).Render("Feeds")
-	entriesHeader := TitleStyle.Width(ew).Render(fmt.Sprintf("%s %s", m.currentFeed.Title, m.currentFeed.URL))
+	feedsView := feedsStyle.Width(fw).Height(h).Render(m.feedsList.View())
+	entriesView := entriesStyle.Width(ew).Height(h).Render(m.entriesList.View())
 	
 	var contentTitle string
 	if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
 		contentTitle = i.entry.Title
 	}
 	contentHeader := TitleStyle.Width(cw).Render(contentTitle)
-
-	feedsView := feedsStyle.Width(fw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, feedsHeader, m.feedsList.View()))
-	entriesView := entriesStyle.Width(ew).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, entriesHeader, m.entriesList.View()))
 	contentView := contentStyle.Width(cw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, contentHeader, m.viewport.View()))
 
 	mainView := lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)

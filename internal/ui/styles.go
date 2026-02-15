@@ -5,7 +5,7 @@ import (
 )
 
 var (
-	DocStyle = lipgloss.NewStyle().Padding(1, 2)
+	DocStyle = lipgloss.NewStyle().Padding(0, 2)
 
 	TitleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("205")).
