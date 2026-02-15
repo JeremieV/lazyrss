@@ -5,6 +5,7 @@ import (
 	"clirss/internal/rss"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -625,6 +626,56 @@ func (m Model) refreshCurrentFeed() tea.Cmd {
 	}
 }
 
+func (m Model) renderMarkdown(md string) string {
+	if m.renderer == nil {
+		return md
+	}
+
+	// Tokenize links to avoid showing URLs
+	// We'll replace [text](url) with a token, render with glamour, and then replace with OSC 8
+	re := regexp.MustCompile(`\[([^\]]+)\]\(([^\)]+)\)`)
+	type linkInfo struct {
+		text string
+		url  string
+	}
+	links := make(map[string]linkInfo)
+	tokenCount := 0
+
+	// Pre-process markdown to replace links with unique tokens
+	processedMD := re.ReplaceAllStringFunc(md, func(match string) string {
+		submatch := re.FindStringSubmatch(match)
+		if len(submatch) < 3 {
+			return match
+		}
+		// Use a token that Glamour won't interpret as Markdown (avoid underscores)
+		token := fmt.Sprintf("GLAMOURURLTOKEN%d", tokenCount)
+		links[token] = linkInfo{text: submatch[1], url: submatch[2]}
+		tokenCount++
+		return token
+	})
+
+	// Render with glamour
+	rendered, err := m.renderer.Render(processedMD)
+	if err != nil {
+		return md
+	}
+
+	// Post-process to insert OSC 8 links
+	for token, info := range links {
+		// Style the link text (blue and underlined)
+		styledText := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("12")).
+			Underline(true).
+			Render(info.text)
+
+		// Create OSC 8 hyperlink
+		osc8 := fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", info.url, styledText)
+		rendered = strings.ReplaceAll(rendered, token, osc8)
+	}
+
+	return strings.TrimSpace(rendered)
+}
+
 func (m Model) viewEntry(e db.Entry) tea.Cmd {
 	return func() tea.Msg {
 		db.MarkAsRead(e.ID)
@@ -633,20 +684,16 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 		descMD, _ := htmltomarkdown.ConvertString(e.Description)
 		contentMD, _ := htmltomarkdown.ConvertString(e.Content)
 
-		if m.renderer == nil {
-			return contentMsg(descMD + "\n\n" + contentMD)
-		}
-
 		var out string
 		if descMD != "" {
-			renderedDesc, _ := m.renderer.Render(descMD)
+			renderedDesc := m.renderMarkdown(descMD)
 			if renderedDesc != "" && renderedDesc != "\n" {
 				out += DescriptionReadingStyle.Render(renderedDesc)
 			}
 		}
 
 		if contentMD != "" && contentMD != descMD {
-			renderedContent, _ := m.renderer.Render(contentMD)
+			renderedContent := m.renderMarkdown(contentMD)
 			if renderedContent != "" && renderedContent != "\n" {
 				if out != "" {
 					out += "\n---\n\n"
@@ -659,7 +706,7 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 			out = "No content available."
 		}
 
-		return contentMsg(strings.TrimSpace(out))
+		return contentMsg(out)
 	}
 }
 
