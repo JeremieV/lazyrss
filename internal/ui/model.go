@@ -55,10 +55,12 @@ type entryItem struct {
 }
 
 func (i entryItem) Title() string {
+	title := i.entry.Title
 	if i.entry.PublishedAt.After(i.feedLastReadAt) {
-		return UnreadItemStyle.Render(i.entry.Title)
+		title = UnreadItemStyle.Render(i.entry.Title)
 	}
-	return i.entry.Title
+	// Wrap the title text in an OSC 8 hyperlink
+	return "\x1b]8;;" + i.entry.Link + "\x1b\\" + title + "\x1b]8;;\x1b\\"
 }
 func (i entryItem) Description() string { return i.entry.PublishedAt.Format("2006-01-02 15:04") }
 func (i entryItem) FilterValue() string { return i.entry.Title }
@@ -176,6 +178,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			r, _ := glamour.NewTermRenderer(
 				glamour.WithAutoStyle(),
 				glamour.WithWordWrap(contentWidth-4),
+				// Ensure links are rendered appropriately for the terminal
+				glamour.WithEmoji(),
 			)
 			m.renderer = r
 		}
@@ -392,7 +396,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = entryItem{entry: e, feedLastReadAt: msg.lastReadAt}
 		}
 		m.entriesList.SetItems(items)
-		m.entriesList.Title = fmt.Sprintf("%s %s", m.currentFeed.Title, m.currentFeed.URL)
+
+		// Make the Feed Title itself clickable using OSC 8 hyperlinks
+		osc8Start := "\x1b]8;;" + m.currentFeed.URL + "\x1b\\"
+		osc8End := "\x1b]8;;\x1b\\"
+		linkedTitle := osc8Start + m.currentFeed.Title + osc8End
+
+		m.entriesList.Title = linkedTitle
 		m.loading = false
 		// Load content for the first entry automatically
 		if len(items) > 0 {
@@ -478,7 +488,10 @@ func (m Model) View() string {
 	
 	var contentTitle string
 	if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
-		contentTitle = i.entry.Title
+		// Make the Article Title itself clickable
+		osc8Start := "\x1b]8;;" + i.entry.Link + "\x1b\\"
+		osc8End := "\x1b]8;;\x1b\\"
+		contentTitle = osc8Start + i.entry.Title + osc8End
 	}
 	contentHeader := TitleStyle.Width(cw).Render(contentTitle)
 	contentView := contentStyle.Width(cw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, contentHeader, m.viewport.View()))
