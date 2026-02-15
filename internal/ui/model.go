@@ -208,6 +208,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "q":
 				return m, tea.Quit
+			case "enter":
+				if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
+					openBrowser(i.entry.Link)
+				}
+				return m, nil
 			case "tab", "right":
 				m.activePane = (m.activePane + 1) % 3
 				return m, nil
@@ -284,21 +289,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, cmd
 				case "r":
 					return m, m.refreshCurrentFeed()
-				case "b":
-					if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
-						openBrowser(i.entry.Link)
-					}
 				}
 				m.entriesList, cmd = m.entriesList.Update(msg)
 				return m, cmd
 
 			case paneContent:
-				switch msg.String() {
-				case "b":
-					if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
-						openBrowser(i.entry.Link)
-					}
-				}
 				m.viewport, cmd = m.viewport.Update(msg)
 				return m, cmd
 			}
@@ -493,7 +488,7 @@ func (m Model) View() string {
 		osc8End := "\x1b]8;;\x1b\\"
 		contentTitle = osc8Start + i.entry.Title + osc8End
 	}
-	contentHeader := TitleStyle.Width(cw).Render(contentTitle)
+	contentHeader := TitleStyle.PaddingLeft(1).Width(cw).Render(contentTitle)
 	contentView := contentStyle.Width(cw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, contentHeader, m.viewport.View()))
 
 	mainView := lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)
@@ -702,11 +697,28 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 	return func() tea.Msg {
 		db.MarkAsRead(e.ID)
 
+		// Build metadata line (published date + link)
+		metaStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+		var metaParts []string
+		if !e.PublishedAt.IsZero() {
+			metaParts = append(metaParts, e.PublishedAt.Format("Mon, 02 Jan 2006 15:04"))
+		}
+		if e.Link != "" {
+			linkOsc := fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\",
+				e.Link,
+				lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Underline(true).Render(e.Link))
+			metaParts = append(metaParts, linkOsc)
+		}
+
+		var out string
+		if len(metaParts) > 0 {
+			out += metaStyle.Render(strings.Join(metaParts, "  ·  ")) + "\n\n"
+		}
+
 		// Convert HTML to Markdown for both description and content
 		descMD, _ := htmltomarkdown.ConvertString(e.Description)
 		contentMD, _ := htmltomarkdown.ConvertString(e.Content)
 
-		var out string
 		if descMD != "" {
 			renderedDesc := m.renderMarkdown(descMD)
 			if renderedDesc != "" && renderedDesc != "\n" {
@@ -740,13 +752,12 @@ func (m Model) helpView() string {
 					"General",
 					"  ?       Show/Hide Help",
 					"  q       Quit",
-					"  Tab     Next Pane",
-					"  S-Tab   Prev Pane",
+					"  Tab/→   Next Pane",
+					"  S-Tab/← Prev Pane",
+					"  Enter   Open in Browser",
 					"",
 					"Navigation",
 					"  ↑/↓     Move Cursor",
-					"  ←/→     Switch Feed/Article",
-					"  Enter   Select/Open",
 					"  Esc     Go Back",
 				),
 			),
@@ -761,15 +772,10 @@ func (m Model) helpView() string {
 					"",
 					"Articles View",
 					"  r       Refresh Current Feed",
-					"  b       Open in Browser",
 				),
 			),
 			lipgloss.NewStyle().Width(30).Render(
 				lipgloss.JoinVertical(lipgloss.Left,
-					"Reading View",
-					"  ←/→     Prev/Next Article",
-					"  b       Open in Browser",
-					"",
 					"Symbols",
 					"  Pink Text   Unread (New items)",
 				),
