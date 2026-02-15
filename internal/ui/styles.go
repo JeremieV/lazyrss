@@ -38,5 +38,13 @@ var (
 				BorderLeft(true).
 				BorderStyle(lipgloss.NormalBorder()).
 				BorderForeground(lipgloss.Color("238"))
+
+	ActivePaneStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), true).
+			BorderForeground(lipgloss.Color("205"))
+
+	InactivePaneStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), true).
+			BorderForeground(lipgloss.Color("240"))
 )
 

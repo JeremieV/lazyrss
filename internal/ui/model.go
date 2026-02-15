@@ -22,9 +22,13 @@ import (
 type state int
 
 const (
-	stateFeeds state = iota
-	stateEntries
-	stateReading
+	paneFeeds state = iota
+	paneEntries
+	paneContent
+)
+
+const (
+	stateMain state = iota
 	stateAddingFeed
 	stateHelp
 )
@@ -60,13 +64,14 @@ func (i entryItem) FilterValue() string { return i.entry.Title }
 
 type Model struct {
 	state         state
+	activePane    state
 	previousState state
 	feedsList     list.Model
-	entriesList list.Model
-	viewport    viewport.Model
-	textInput   textinput.Model
-	spinner     spinner.Model
-	loading     bool
+	entriesList   list.Model
+	viewport      viewport.Model
+	textInput     textinput.Model
+	spinner       spinner.Model
+	loading       bool
 	err         error
 	width       int
 	height      int
@@ -84,7 +89,8 @@ func NewModel() Model {
 	ti.Focus()
 
 	m := Model{
-		state:       stateFeeds,
+		state:       stateMain,
+		activePane:  paneFeeds,
 		feedsList:   list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
 		entriesList: list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
 		viewport:    viewport.New(0, 0),
@@ -120,24 +126,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.feedsList.SetSize(msg.Width-4, msg.Height-4)
-		m.entriesList.SetSize(msg.Width-4, msg.Height-4)
-		m.viewport.Width = msg.Width - 4
-		m.viewport.Height = msg.Height - 4
+
+		// Calculate pane widths (3 panes)
+		feedsWidth := int(float64(msg.Width) * 0.2)
+		if feedsWidth < 20 {
+			feedsWidth = 20
+		}
+		entriesWidth := int(float64(msg.Width) * 0.25)
+		if entriesWidth < 25 {
+			entriesWidth = 25
+		}
+		contentWidth := msg.Width - feedsWidth - entriesWidth - 10
+
+		m.feedsList.SetSize(feedsWidth, msg.Height-6)
+		m.entriesList.SetSize(entriesWidth, msg.Height-6)
+		m.viewport.Width = contentWidth
+		m.viewport.Height = msg.Height - 8
 		m.textInput.Width = msg.Width - 10
 
-		// Update renderer with new width, but don't block if it's identical
+		// Update renderer
 		if m.renderer == nil || m.width != msg.Width {
 			r, _ := glamour.NewTermRenderer(
 				glamour.WithAutoStyle(),
-				glamour.WithWordWrap(msg.Width-10),
+				glamour.WithWordWrap(contentWidth-4),
 			)
 			m.renderer = r
 		}
+		return m, nil
 
 	case tea.KeyMsg:
-		isFiltering := (m.state == stateFeeds && m.feedsList.FilterState() == list.Filtering) ||
-			(m.state == stateEntries && m.entriesList.FilterState() == list.Filtering)
+		isFiltering := (m.feedsList.FilterState() == list.Filtering) ||
+			(m.entriesList.FilterState() == list.Filtering)
 
 		if msg.String() == "?" && m.state != stateHelp && m.state != stateAddingFeed && !isFiltering {
 			m.previousState = m.state
@@ -151,148 +170,167 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = m.previousState
 				return m, nil
 			}
+			return m, nil
 
-		case stateFeeds:
-			if m.feedsList.FilterState() == list.Filtering {
-				break
-			}
+		case stateMain:
 			switch msg.String() {
-			case "alt+up", "alt+k":
-				idx := m.feedsList.Index()
-				if idx > 0 {
-					itemA := m.feedsList.Items()[idx].(feedItem)
-					itemB := m.feedsList.Items()[idx-1].(feedItem)
-					// If they have the same position, ensure they are different before swapping
-					posA, posB := itemA.feed.Position, itemB.feed.Position
-					if posA == posB {
-						posA = idx
-						posB = idx - 1
-					}
-					db.SwapFeedPositions(int(itemA.feed.ID), posA, int(itemB.feed.ID), posB)
-					return m, m.loadFeedsWithIndex(idx - 1)
-				}
-			case "alt+down", "alt+j":
-				idx := m.feedsList.Index()
-				if idx < len(m.feedsList.Items())-1 {
-					itemA := m.feedsList.Items()[idx].(feedItem)
-					itemB := m.feedsList.Items()[idx+1].(feedItem)
-					posA, posB := itemA.feed.Position, itemB.feed.Position
-					if posA == posB {
-						posA = idx
-						posB = idx + 1
-					}
-					db.SwapFeedPositions(int(itemA.feed.ID), posA, int(itemB.feed.ID), posB)
-					return m, m.loadFeedsWithIndex(idx + 1)
-				}
-			case "left":
-				m.feedsList.CursorUp()
+			case "q":
+				return m, tea.Quit
+			case "tab":
+				m.activePane = (m.activePane + 1) % 3
 				return m, nil
-			case "right":
-				m.feedsList.CursorDown()
+			case "shift+tab":
+				m.activePane = (m.activePane - 1 + 3) % 3
 				return m, nil
 			case "a":
 				m.state = stateAddingFeed
 				m.textInput.Focus()
 				return m, nil
 			case "r":
-				m.loading = true
 				return m, m.refreshAllFeeds
-			case "d":
-				if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
-					m.loading = true
-					return m, m.deleteFeed(i.feed.ID)
-				}
-			case "enter":
-				if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
-					m.currentFeed = i.feed
-					m.state = stateEntries
-					m.loading = true
-					m.entriesList.SetItems([]list.Item{}) // Clear previous entries
-					return m, m.loadEntries(i.feed)
-				}
-			case "q":
-				return m, tea.Quit
 			}
 
-		case stateEntries:
-			if m.entriesList.FilterState() == list.Filtering {
-				break
-			}
-			switch msg.String() {
-			case "left":
-				m.feedsList.CursorUp()
-				if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
-					m.currentFeed = i.feed
-					m.state = stateEntries
-					m.loading = true
-					m.entriesList.SetItems([]list.Item{})
-					return m, m.loadEntries(i.feed)
+			// Delegate to active pane
+			var cmd tea.Cmd
+			switch m.activePane {
+			case paneFeeds:
+				if m.feedsList.FilterState() == list.Filtering {
+					m.feedsList, cmd = m.feedsList.Update(msg)
+					return m, cmd
 				}
-			case "right":
-				m.feedsList.CursorDown()
-				if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
-					m.currentFeed = i.feed
-					m.state = stateEntries
-					m.loading = true
-					m.entriesList.SetItems([]list.Item{})
-					return m, m.loadEntries(i.feed)
+				switch msg.String() {
+				case "up", "down", "j", "k":
+					m.feedsList, cmd = m.feedsList.Update(msg)
+					if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
+						m.currentFeed = i.feed
+						return m, tea.Batch(cmd, m.loadEntries(i.feed))
+					}
+					return m, cmd
+				case "alt+up", "alt+k":
+					idx := m.feedsList.Index()
+					if idx > 0 {
+						itemA := m.feedsList.Items()[idx].(feedItem)
+						itemB := m.feedsList.Items()[idx-1].(feedItem)
+						posA, posB := itemA.feed.Position, itemB.feed.Position
+						if posA == posB {
+							posA, posB = idx, idx-1
+						}
+						db.SwapFeedPositions(int(itemA.feed.ID), posA, int(itemB.feed.ID), posB)
+						return m, m.loadFeedsWithIndex(idx - 1)
+					}
+				case "alt+down", "alt+j":
+					idx := m.feedsList.Index()
+					if idx < len(m.feedsList.Items())-1 {
+						itemA := m.feedsList.Items()[idx].(feedItem)
+						itemB := m.feedsList.Items()[idx+1].(feedItem)
+						posA, posB := itemA.feed.Position, itemB.feed.Position
+						if posA == posB {
+							posA, posB = idx, idx+1
+						}
+						db.SwapFeedPositions(int(itemA.feed.ID), posA, int(itemB.feed.ID), posB)
+						return m, m.loadFeedsWithIndex(idx + 1)
+					}
+				case "d":
+					if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
+						return m, m.deleteFeed(i.feed.ID)
+					}
 				}
-			case "esc", "backspace":
-				m.state = stateFeeds
-				return m, m.loadFeeds
-			case "r":
-				m.loading = true
-				return m, m.refreshCurrentFeed
-			case "enter":
-				if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
-					m.state = stateReading
-					m.loading = true
-					m.viewport.SetContent("Loading content...") // Clear previous content
-					return m, m.viewEntry(i.entry)
-				}
-			case "b":
-				if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
-					openBrowser(i.entry.Link)
-				}
-			}
+				m.feedsList, cmd = m.feedsList.Update(msg)
+				return m, cmd
 
-		case stateReading:
-			switch msg.String() {
-			case "right":
-				m.entriesList.CursorDown()
-				if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
-					m.loading = true
-					m.viewport.SetContent("Loading next...")
-					return m, m.viewEntry(i.entry)
+			case paneEntries:
+				if m.entriesList.FilterState() == list.Filtering {
+					m.entriesList, cmd = m.entriesList.Update(msg)
+					return m, cmd
 				}
-			case "left":
-				m.entriesList.CursorUp()
-				if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
-					m.loading = true
-					m.viewport.SetContent("Loading previous...")
-					return m, m.viewEntry(i.entry)
+				switch msg.String() {
+				case "up", "down", "j", "k":
+					m.entriesList, cmd = m.entriesList.Update(msg)
+					if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
+						return m, tea.Batch(cmd, m.viewEntry(i.entry))
+					}
+					return m, cmd
+				case "r":
+					return m, m.refreshCurrentFeed
+				case "b":
+					if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
+						openBrowser(i.entry.Link)
+					}
 				}
-			case "esc", "backspace":
-				m.state = stateEntries
-				return m, tea.Batch(m.loadFeeds, m.loadEntries(m.currentFeed))
-			case "b":
-				if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
-					openBrowser(i.entry.Link)
+				m.entriesList, cmd = m.entriesList.Update(msg)
+				return m, cmd
+
+			case paneContent:
+				switch msg.String() {
+				case "b":
+					if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
+						openBrowser(i.entry.Link)
+					}
 				}
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
 			}
 
 		case stateAddingFeed:
 			switch msg.String() {
 			case "esc":
-				m.state = stateFeeds
+				m.state = stateMain
 				m.textInput.Reset()
 				return m, nil
 			case "enter":
 				url := m.textInput.Value()
-				m.state = stateFeeds
+				m.state = stateMain
 				m.textInput.Reset()
 				m.loading = true
 				return m, m.addFeed(url)
+			}
+			m.textInput, cmd = m.textInput.Update(msg)
+			return m, cmd
+		}
+
+	case tea.MouseMsg:
+		// Adjust for DocStyle padding (1 top, 2 left)
+		msg.X -= 2
+		msg.Y -= 1
+
+		// Handle Scrolling
+		if msg.Action == tea.MouseActionPress {
+			if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+				// Route scroll to the pane the mouse is currently over
+				if msg.X < m.feedsList.Width() {
+					m.feedsList, cmd = m.feedsList.Update(msg)
+					return m, cmd
+				} else if msg.X < m.feedsList.Width()+m.entriesList.Width()+2 {
+					m.entriesList, cmd = m.entriesList.Update(msg)
+					return m, cmd
+				} else {
+					m.viewport, cmd = m.viewport.Update(msg)
+					return m, cmd
+				}
+			}
+		}
+
+		// Handle Clicking
+		if msg.Type == tea.MouseLeft && msg.Action == tea.MouseActionRelease {
+			if msg.X < m.feedsList.Width() {
+				m.activePane = paneFeeds
+				m.feedsList, cmd = m.feedsList.Update(msg)
+				if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
+					m.currentFeed = i.feed
+					return m, tea.Batch(cmd, m.loadEntries(i.feed))
+				}
+				return m, cmd
+			} else if msg.X < m.feedsList.Width()+m.entriesList.Width()+2 {
+				m.activePane = paneEntries
+				m.entriesList, cmd = m.entriesList.Update(msg)
+				if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
+					return m, tea.Batch(cmd, m.viewEntry(i.entry))
+				}
+				return m, cmd
+			} else {
+				m.activePane = paneContent
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
 			}
 		}
 
@@ -302,6 +340,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.feedsList.Select(msg.index)
 		}
 		m.loading = false
+		// Load entries for the first feed automatically
+		if len(msg.items) > 0 {
+			if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
+				m.currentFeed = i.feed
+				return m, m.loadEntries(i.feed)
+			}
+		}
 
 	case entriesMsg:
 		items := make([]list.Item, len(msg.entries))
@@ -311,6 +356,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entriesList.SetItems(items)
 		m.entriesList.Title = m.currentFeed.Title
 		m.loading = false
+		// Load content for the first entry automatically
+		if len(items) > 0 {
+			if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
+				return m, m.viewEntry(i.entry)
+			}
+		}
 
 	case contentMsg:
 		m.viewport.SetContent(string(msg))
@@ -327,13 +378,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Route updates to sub-models
 	switch m.state {
-	case stateFeeds:
+	case stateMain:
 		m.feedsList, cmd = m.feedsList.Update(msg)
 		cmds = append(cmds, cmd)
-	case stateEntries:
 		m.entriesList, cmd = m.entriesList.Update(msg)
 		cmds = append(cmds, cmd)
-	case stateReading:
 		m.viewport, cmd = m.viewport.Update(msg)
 		cmds = append(cmds, cmd)
 	case stateAddingFeed:
@@ -349,26 +398,43 @@ func (m Model) View() string {
 		return ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
 	}
 
+	if m.state == stateHelp {
+		return DocStyle.Render(m.helpView())
+	}
+
+	if m.state == stateAddingFeed {
+		return DocStyle.Render(TitleStyle.Render("Add Feed") + "\n\n" +
+			"Enter URL:\n\n" + m.textInput.View() + "\n\n(esc to cancel)")
+	}
+
+	// Main 3-pane view
+	feedsStyle := InactivePaneStyle
+	entriesStyle := InactivePaneStyle
+	contentStyle := InactivePaneStyle
+
+	switch m.activePane {
+	case paneFeeds:
+		feedsStyle = ActivePaneStyle
+	case paneEntries:
+		entriesStyle = ActivePaneStyle
+	case paneContent:
+		contentStyle = ActivePaneStyle
+	}
+
+	feedsView := feedsStyle.Width(m.feedsList.Width()).Height(m.feedsList.Height()).Render(m.feedsList.View())
+	entriesView := entriesStyle.Width(m.entriesList.Width()).Height(m.entriesList.Height()).Render(m.entriesList.View())
+	contentView := contentStyle.Width(m.viewport.Width).Height(m.viewport.Height).Render(m.viewport.View())
+
+	mainView := lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)
+
 	header := ""
 	if m.loading {
 		header = m.spinner.View() + " Loading..."
+	} else {
+		header = StatusStyle.Render("Tab: switch panes | ?: help")
 	}
 
-	var content string
-	switch m.state {
-	case stateFeeds:
-		content = m.feedsList.View()
-	case stateEntries:
-		content = m.entriesList.View()
-	case stateReading:
-		content = TitleStyle.Render(m.entriesList.SelectedItem().(entryItem).entry.Title) + "\n\n" + m.viewport.View()
-	case stateAddingFeed:
-		content = "Add Feed URL:\n\n" + m.textInput.View() + "\n\n(esc to cancel)"
-	case stateHelp:
-		content = m.helpView()
-	}
-
-	return DocStyle.Render(header + "\n" + content)
+	return DocStyle.Render(header + "\n\n" + mainView)
 }
 
 // Commands
@@ -505,6 +571,8 @@ func (m Model) helpView() string {
 					"General",
 					"  ?       Show/Hide Help",
 					"  q       Quit",
+					"  Tab     Next Pane",
+					"  S-Tab   Prev Pane",
 					"",
 					"Navigation",
 					"  ↑/↓     Move Cursor",
