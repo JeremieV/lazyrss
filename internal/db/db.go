@@ -45,7 +45,8 @@ func InitDB() error {
 	}
 
 	fullPath := filepath.Join(dbPath, "rss.db")
-	db, err := sql.Open("sqlite", fullPath)
+	// Add pragma for WAL mode and busy timeout to handle concurrent access
+	db, err := sql.Open("sqlite", fullPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return err
 	}

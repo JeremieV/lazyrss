@@ -45,7 +45,7 @@ func (i feedItem) Title() string {
 	}
 	return i.feed.Title
 }
-func (i feedItem) Description() string { return i.feed.URL }
+func (i feedItem) Description() string { return "" }
 func (i feedItem) FilterValue() string { return i.feed.Title }
 
 type entryItem struct {
@@ -98,13 +98,18 @@ func NewModel() Model {
 		spinner:     s,
 		loading:     true, // Set to true initially so the user sees the spinner immediately
 	}
+	d := list.NewDefaultDelegate()
+	d.ShowDescription = false
+	m.feedsList.SetDelegate(d)
 	m.feedsList.Title = "Feeds"
 	m.feedsList.SetShowStatusBar(false)
+	m.feedsList.SetShowHelp(false)
 	m.feedsList.AdditionalFullHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		}
 	}
+	m.entriesList.SetShowHelp(false)
 	m.entriesList.AdditionalFullHelpKeys = m.feedsList.AdditionalFullHelpKeys
 
 	return m
@@ -114,7 +119,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.loadFeeds,
 		m.spinner.Tick,
-		m.refreshAllFeeds, // Start background sync directly
+		m.startBackgroundSync,
 	)
 }
 
@@ -141,7 +146,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.feedsList.SetSize(feedsWidth, msg.Height-6)
 		m.entriesList.SetSize(entriesWidth, msg.Height-6)
 		m.viewport.Width = contentWidth
-		m.viewport.Height = msg.Height - 8
+		m.viewport.Height = msg.Height - 6
 		m.textInput.Width = msg.Width - 10
 
 		// Update renderer
@@ -187,7 +192,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textInput.Focus()
 				return m, nil
 			case "r":
-				return m, m.refreshAllFeeds
+				return m, m.refreshAllFeeds()
 			}
 
 			// Delegate to active pane
@@ -251,7 +256,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, cmd
 				case "r":
-					return m, m.refreshCurrentFeed
+					return m, m.refreshCurrentFeed()
 				case "b":
 					if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
 						openBrowser(i.entry.Link)
@@ -334,6 +339,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case backgroundSyncMsg:
+		var cmds []tea.Cmd
+		for _, f := range msg.feeds {
+			cmds = append(cmds, m.syncFeed(f))
+		}
+		return m, tea.Batch(cmds...)
+
+	case feedSyncedMsg:
+		// When a feed is synced, we reload the feeds list to update unread counts
+		return m, m.loadFeeds
+
 	case feedsMsg:
 		m.feedsList.SetItems(msg.items)
 		if msg.index >= 0 && msg.index < len(msg.items) {
@@ -354,7 +370,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = entryItem{entry: e, feedLastReadAt: msg.lastReadAt}
 		}
 		m.entriesList.SetItems(items)
-		m.entriesList.Title = m.currentFeed.Title
+		m.entriesList.Title = fmt.Sprintf("%s (%s)", m.currentFeed.Title, m.currentFeed.URL)
 		m.loading = false
 		// Load content for the first entry automatically
 		if len(items) > 0 {
@@ -421,26 +437,35 @@ func (m Model) View() string {
 		contentStyle = ActivePaneStyle
 	}
 
-	feedsView := feedsStyle.Width(m.feedsList.Width()).Height(m.feedsList.Height()).Render(m.feedsList.View())
-	entriesView := entriesStyle.Width(m.entriesList.Width()).Height(m.entriesList.Height()).Render(m.entriesList.View())
-	contentView := contentStyle.Width(m.viewport.Width).Height(m.viewport.Height).Render(m.viewport.View())
+	feedsView := feedsStyle.Width(m.feedsList.Width()).Render(m.feedsList.View())
+	entriesView := entriesStyle.Width(m.entriesList.Width()).Render(m.entriesList.View())
+	contentView := contentStyle.Width(m.viewport.Width).Render(m.viewport.View())
 
 	mainView := lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)
 
-	header := ""
+	statusText := ""
 	if m.loading {
-		header = m.spinner.View() + " Loading..."
+		statusText = m.spinner.View() + " Loading..."
 	} else {
-		header = StatusStyle.Render("Tab: switch panes | ?: help")
+		statusText = "Tab: switch panes | ?: help"
 	}
 
-	return DocStyle.Render(header + "\n\n" + mainView)
+	// Status Bar styling
+	statusBar := StatusStyle.Width(m.width - 4).Render(statusText)
+
+	return DocStyle.Render(lipgloss.JoinVertical(lipgloss.Left, mainView, statusBar))
 }
 
 // Commands
 type feedsMsg struct {
 	items []list.Item
 	index int
+}
+type backgroundSyncMsg struct {
+	feeds []db.Feed
+}
+type feedSyncedMsg struct {
+	feedID int64
 }
 type entriesMsg struct {
 	entries    []db.Entry
@@ -512,17 +537,36 @@ func (m Model) deleteFeed(id int64) tea.Cmd {
 	}
 }
 
-func (m Model) refreshAllFeeds() tea.Msg {
-	feeds, _ := db.GetFeeds()
-	for _, f := range feeds {
-		rss.SyncFeed(f.ID, f.URL)
+func (m Model) startBackgroundSync() tea.Msg {
+	feeds, err := db.GetFeeds()
+	if err != nil {
+		return errMsg(err)
 	}
-	return m.loadFeeds()
+	return backgroundSyncMsg{feeds: feeds}
 }
 
-func (m Model) refreshCurrentFeed() tea.Msg {
-	rss.SyncFeed(m.currentFeed.ID, m.currentFeed.URL)
-	return m.loadEntries(m.currentFeed)()
+func (m Model) syncFeed(f db.Feed) tea.Cmd {
+	return func() tea.Msg {
+		err := rss.SyncFeed(f.ID, f.URL)
+		if err != nil {
+			return errMsg(err)
+		}
+		return feedSyncedMsg{feedID: f.ID}
+	}
+}
+
+func (m Model) refreshAllFeeds() tea.Cmd {
+	return m.startBackgroundSync
+}
+
+func (m Model) refreshCurrentFeed() tea.Cmd {
+	return func() tea.Msg {
+		err := rss.SyncFeed(m.currentFeed.ID, m.currentFeed.URL)
+		if err != nil {
+			return errMsg(err)
+		}
+		return m.loadEntries(m.currentFeed)()
+	}
 }
 
 func (m Model) viewEntry(e db.Entry) tea.Cmd {

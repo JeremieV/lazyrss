@@ -13,8 +13,9 @@ var (
 			Padding(0, 1)
 
 	StatusStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			Italic(true)
+			Foreground(lipgloss.Color("252")).
+			Background(lipgloss.Color("235")).
+			Padding(0, 1)
 
 	ErrorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196")).
