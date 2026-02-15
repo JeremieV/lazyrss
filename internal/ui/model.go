@@ -109,6 +109,7 @@ func NewModel() Model {
 			key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		}
 	}
+	m.entriesList.SetShowStatusBar(false)
 	m.entriesList.SetShowHelp(false)
 	m.entriesList.AdditionalFullHelpKeys = m.feedsList.AdditionalFullHelpKeys
 
@@ -141,12 +142,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if entriesWidth < 25 {
 			entriesWidth = 25
 		}
+		// Total width = feedsWidth + entriesWidth + contentWidth + borders/padding
+		// DocStyle margin: 2 left, 2 right = 4
+		// Pane borders: 3 panes * 2 = 6
 		contentWidth := msg.Width - feedsWidth - entriesWidth - 10
+		if contentWidth < 30 {
+			contentWidth = 30
+		}
 
-		m.feedsList.SetSize(feedsWidth, msg.Height-6)
-		m.entriesList.SetSize(entriesWidth, msg.Height-6)
+		// Height calculation:
+		// msg.Height
+		// - 1 (Top margin)
+		// - 1 (Bottom margin)
+		// - 1 (Status bar)
+		// = msg.Height - 3 for the main view height including borders
+		// Internal height for components = msg.Height - 3 - 2 (borders) = msg.Height - 5
+		paneHeight := msg.Height - 5
+
+		m.feedsList.SetSize(feedsWidth, paneHeight)
+		m.entriesList.SetSize(entriesWidth, paneHeight)
 		m.viewport.Width = contentWidth
-		m.viewport.Height = msg.Height - 6
+		m.viewport.Height = paneHeight
 		m.textInput.Width = msg.Width - 10
 
 		// Update renderer
@@ -370,7 +386,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = entryItem{entry: e, feedLastReadAt: msg.lastReadAt}
 		}
 		m.entriesList.SetItems(items)
-		m.entriesList.Title = fmt.Sprintf("%s (%s)", m.currentFeed.Title, m.currentFeed.URL)
+		m.entriesList.Title = fmt.Sprintf("%s %s", m.currentFeed.Title, m.currentFeed.URL)
 		m.loading = false
 		// Load content for the first entry automatically
 		if len(items) > 0 {
@@ -424,22 +440,36 @@ func (m Model) View() string {
 	}
 
 	// Main 3-pane view
-	feedsStyle := InactivePaneStyle
-	entriesStyle := InactivePaneStyle
-	contentStyle := InactivePaneStyle
+	feedsStyle := InactivePaneStyle.Copy()
+	entriesStyle := InactivePaneStyle.Copy()
+	contentStyle := InactivePaneStyle.Copy()
 
 	switch m.activePane {
 	case paneFeeds:
-		feedsStyle = ActivePaneStyle
+		feedsStyle = ActivePaneStyle.Copy()
 	case paneEntries:
-		entriesStyle = ActivePaneStyle
+		entriesStyle = ActivePaneStyle.Copy()
 	case paneContent:
-		contentStyle = ActivePaneStyle
+		contentStyle = ActivePaneStyle.Copy()
 	}
 
-	feedsView := feedsStyle.Width(m.feedsList.Width()).Render(m.feedsList.View())
-	entriesView := entriesStyle.Width(m.entriesList.Width()).Render(m.entriesList.View())
-	contentView := contentStyle.Width(m.viewport.Width).Render(m.viewport.View())
+	// Force consistent height and width on all panes
+	h := m.feedsList.Height()
+	if h <= 0 {
+		h = 10 // fallback for initial load
+	}
+	
+	// Ensure widths are also set
+	fw := m.feedsList.Width()
+	if fw <= 0 { fw = 20 }
+	ew := m.entriesList.Width()
+	if ew <= 0 { ew = 25 }
+	cw := m.viewport.Width
+	if cw <= 0 { cw = 40 }
+
+	feedsView := feedsStyle.Width(fw).Height(h).Render(m.feedsList.View())
+	entriesView := entriesStyle.Width(ew).Height(h).Render(m.entriesList.View())
+	contentView := contentStyle.Width(cw).Height(h).Render(m.viewport.View())
 
 	mainView := lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)
 
@@ -451,7 +481,8 @@ func (m Model) View() string {
 	}
 
 	// Status Bar styling
-	statusBar := StatusStyle.Width(m.width - 4).Render(statusText)
+	totalWidth := fw + ew + cw + 6
+	statusBar := StatusStyle.Width(totalWidth).Render(statusText)
 
 	return DocStyle.Render(lipgloss.JoinVertical(lipgloss.Left, mainView, statusBar))
 }
@@ -577,11 +608,17 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 		descMD, _ := htmltomarkdown.ConvertString(e.Description)
 		contentMD, _ := htmltomarkdown.ConvertString(e.Content)
 
+		titleMD := "# " + e.Title + "\n\n"
+		
 		if m.renderer == nil {
-			return contentMsg(descMD + "\n\n" + contentMD)
+			return contentMsg(titleMD + descMD + "\n\n" + contentMD)
 		}
 
 		var out string
+		// Render title first
+		renderedTitle, _ := m.renderer.Render(titleMD)
+		out += renderedTitle
+
 		if descMD != "" {
 			renderedDesc, _ := m.renderer.Render(descMD)
 			if renderedDesc != "" && renderedDesc != "\n" {
@@ -592,9 +629,6 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 		if contentMD != "" && contentMD != descMD {
 			renderedContent, _ := m.renderer.Render(contentMD)
 			if renderedContent != "" && renderedContent != "\n" {
-				if out != "" {
-					out += "\n---\n\n"
-				}
 				out += renderedContent
 			}
 		}

@@ -5,7 +5,7 @@ import (
 )
 
 var (
-	DocStyle = lipgloss.NewStyle().Margin(1, 2)
+	DocStyle = lipgloss.NewStyle().Padding(1, 2)
 
 	TitleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("205")).
@@ -34,11 +34,7 @@ var (
 
 	DescriptionReadingStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("241")).
-				Italic(true).
-				PaddingLeft(2).
-				BorderLeft(true).
-				BorderStyle(lipgloss.NormalBorder()).
-				BorderForeground(lipgloss.Color("238"))
+				Background(lipgloss.Color("235"))
 
 	ActivePaneStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), true).
