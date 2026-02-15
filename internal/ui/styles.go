@@ -33,8 +33,12 @@ var (
 			Bold(true)
 
 	DescriptionReadingStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("241")).
-				Background(lipgloss.Color("235"))
+				Foreground(lipgloss.Color("252")).
+				Italic(true).
+				MarginLeft(2).
+				BorderLeft(true).
+				BorderStyle(lipgloss.ThickBorder()).
+				BorderForeground(lipgloss.Color("205"))
 
 	ActivePaneStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), true).

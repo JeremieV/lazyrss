@@ -730,7 +730,7 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 			renderedContent := m.renderMarkdown(contentMD)
 			if renderedContent != "" && renderedContent != "\n" {
 				if out != "" {
-					out += "\n---\n\n"
+					out += "\n\n"
 				}
 				out += renderedContent
 			}
