@@ -91,6 +91,7 @@ type Model struct {
 	initialLoadDone bool
 	syncPending     int
 	statusMsg       string
+	showFeedInfo    bool
 	// Stored pane dimensions for consistent rendering
 	paneHeight   int
 	feedsWidth   int
@@ -257,6 +258,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.filePicker.Init()
 			case "e":
 				return m, m.exportOPML
+			case "v":
+				m.showFeedInfo = !m.showFeedInfo
+				return m, nil
 			case "r":
 				return m, m.refreshAllFeeds()
 			}
@@ -549,7 +553,34 @@ func (m Model) View() string {
 	} else {
 		entriesTitle = m.entriesList.Styles.Title.Copy().MarginLeft(2).Render("Articles")
 	}
-	entriesView := entriesStyle.Width(ew).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, entriesTitle, m.entriesList.View()))
+
+	var entriesView string
+	if m.showFeedInfo && m.currentFeed.ID != 0 {
+		infoStyle := lipgloss.NewStyle().Padding(1, 2).Foreground(lipgloss.Color("252"))
+		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Bold(true)
+
+		desc := m.currentFeed.Description
+		if desc == "" {
+			desc = "No description available."
+		}
+
+		info := lipgloss.JoinVertical(lipgloss.Left,
+			labelStyle.Render("Title:"),
+			m.currentFeed.Title,
+			"",
+			labelStyle.Render("URL:"),
+			m.currentFeed.URL,
+			"",
+			labelStyle.Render("Description:"),
+			lipgloss.NewStyle().Width(ew - 4).Render(desc),
+			"",
+			labelStyle.Render("Added:"),
+			m.currentFeed.CreatedAt.Format("2006-01-02 15:04"),
+		)
+		entriesView = entriesStyle.Width(ew).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, entriesTitle, infoStyle.Render(info)))
+	} else {
+		entriesView = entriesStyle.Width(ew).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, entriesTitle, m.entriesList.View()))
+	}
 
 	var contentTitle string
 	if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
@@ -911,6 +942,7 @@ func (m Model) helpView() string {
 					"  a       Add New Feed",
 					"  i       Import OPML",
 					"  e       Export OPML",
+					"  v       Toggle Feed Info",
 					"  d       Delete Feed",
 					"  r       Refresh All",
 					"",
