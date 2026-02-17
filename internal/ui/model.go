@@ -10,15 +10,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/JohannesKaufmann/html-to-markdown/v2"
+	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 )
 
 
@@ -193,9 +193,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update renderer
 		if m.renderer == nil || m.width != msg.Width {
 			r, _ := glamour.NewTermRenderer(
-				glamour.WithAutoStyle(),
+				glamour.WithStylePath("dark"),
 				glamour.WithWordWrap(contentWidth-4),
-				// Ensure links are rendered appropriately for the terminal
 				glamour.WithEmoji(),
 			)
 			m.renderer = r
