@@ -4,12 +4,15 @@ import (
 	"clirss/internal/db"
 	"clirss/internal/rss"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -33,6 +36,8 @@ const (
 const (
 	stateMain state = iota
 	stateAddingFeed
+	stateImportingOPML
+	stateExportingOPML
 	stateHelp
 )
 
@@ -75,6 +80,7 @@ type Model struct {
 	entriesList   list.Model
 	viewport      viewport.Model
 	textInput     textinput.Model
+	filePicker    filepicker.Model
 	spinner       spinner.Model
 	loading       bool
 	width       int
@@ -83,6 +89,7 @@ type Model struct {
 	renderer    *glamour.TermRenderer
 	initialLoadDone bool
 	syncPending     int
+	statusMsg       string
 	// Stored pane dimensions for consistent rendering
 	paneHeight   int
 	feedsWidth   int
@@ -99,6 +106,10 @@ func NewModel() Model {
 	ti.Placeholder = "RSS Feed URL"
 	ti.Focus()
 
+	fp := filepicker.New()
+	fp.AllowedTypes = []string{".opml", ".xml"}
+	fp.CurrentDirectory, _ = os.UserHomeDir()
+
 	m := Model{
 		state:       stateMain,
 		activePane:  paneFeeds,
@@ -106,6 +117,7 @@ func NewModel() Model {
 		entriesList: list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
 		viewport:    viewport.New(0, 0),
 		textInput:   ti,
+		filePicker:  fp,
 		spinner:     s,
 		loading:     true, // Set to true initially so the user sees the spinner immediately
 	}
@@ -189,6 +201,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Viewport height needs to account for the custom header we render in the View function
 		m.viewport.Height = paneHeight - 1
 		m.textInput.Width = msg.Width - 10
+		m.filePicker.Height = msg.Height - 5
 
 		// Update renderer
 		if m.renderer == nil || m.width != msg.Width {
@@ -202,6 +215,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		m.statusMsg = "" // Clear status message on any keypress
 		isFiltering := (m.feedsList.FilterState() == list.Filtering) ||
 			(m.entriesList.FilterState() == list.Filtering)
 
@@ -238,6 +252,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = stateAddingFeed
 				m.textInput.Focus()
 				return m, nil
+			case "i":
+				m.state = stateImportingOPML
+				return m, m.filePicker.Init()
+			case "e":
+				return m, m.exportOPML
 			case "r":
 				return m, m.refreshAllFeeds()
 			}
@@ -327,6 +346,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.addFeed(url)
 			}
 			m.textInput, cmd = m.textInput.Update(msg)
+			return m, cmd
+
+		case stateImportingOPML:
+			if msg.String() == "esc" {
+				m.state = stateMain
+				return m, nil
+			}
+			m.filePicker, cmd = m.filePicker.Update(msg)
+			if didSelect, path := m.filePicker.DidSelectFile(msg); didSelect {
+				m.state = stateMain
+				m.loading = true
+				return m, m.importOPML(path)
+			}
 			return m, cmd
 		}
 
@@ -429,6 +461,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetContent(string(msg))
 		m.loading = false
 
+	case exportMsg:
+		m.statusMsg = string(msg)
+		m.loading = false
+
 	case errMsg:
 		// Display error in the content pane instead of crashing
 		m.viewport.SetContent(ErrorStyle.Render(fmt.Sprintf("Error: %v", msg)))
@@ -451,6 +487,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateAddingFeed:
 		m.textInput, cmd = m.textInput.Update(msg)
 		cmds = append(cmds, cmd)
+	case stateImportingOPML:
+		m.filePicker, cmd = m.filePicker.Update(msg)
+		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -464,6 +503,11 @@ func (m Model) View() string {
 	if m.state == stateAddingFeed {
 		return DocStyle.Render(TitleStyle.Render("Add Feed") + "\n\n" +
 			"Enter URL:\n\n" + m.textInput.View() + "\n\n(esc to cancel)")
+	}
+
+	if m.state == stateImportingOPML {
+		return DocStyle.Render(TitleStyle.Render("Import OPML") + "\n\n" +
+			m.filePicker.View() + "\n\n(esc to cancel)")
 	}
 
 	// Main 3-pane view
@@ -526,6 +570,8 @@ func (m Model) View() string {
 		midText = m.spinner.View() + " Loading..."
 	} else if m.syncPending > 0 {
 		midText = m.spinner.View() + " Syncing feeds..."
+	} else if m.statusMsg != "" {
+		midText = m.statusMsg
 	}
 	midWidth := totalWidth - pillWidth - helpWidth
 	if midWidth < 0 {
@@ -554,6 +600,7 @@ type entriesMsg struct {
 	lastReadAt time.Time
 }
 type contentMsg string
+type exportMsg string
 
 func (m Model) loadFeeds() tea.Msg {
 	feeds, err := db.GetFeeds()
@@ -649,6 +696,63 @@ func (m Model) refreshCurrentFeed() tea.Cmd {
 		}
 		return m.loadEntries(m.currentFeed)()
 	}
+}
+
+func (m Model) importOPML(path string) tea.Cmd {
+	return func() tea.Msg {
+		f, err := os.Open(path)
+		if err != nil {
+			return errMsg(err)
+		}
+		defer f.Close()
+
+		opml, err := rss.ParseOPML(f)
+		if err != nil {
+			return errMsg(err)
+		}
+
+		outlines := opml.Flatten()
+		for _, out := range outlines {
+			title := out.Title
+			if title == "" {
+				title = out.Text
+			}
+			_, _ = db.AddFeed(out.XMLURL, title, "")
+		}
+
+		return m.loadFeeds()
+	}
+}
+
+func (m Model) exportOPML() tea.Msg {
+	feeds, err := db.GetFeeds()
+	if err != nil {
+		return errMsg(err)
+	}
+
+	var outlines []rss.Outline
+	for _, f := range feeds {
+		outlines = append(outlines, rss.Outline{
+			Text:   f.Title,
+			Title:  f.Title,
+			Type:   "rss",
+			XMLURL: f.URL,
+		})
+	}
+
+	data, err := rss.GenerateOPML(outlines)
+	if err != nil {
+		return errMsg(err)
+	}
+
+	home, _ := os.UserHomeDir()
+	exportPath := filepath.Join(home, "Downloads", "feeds_export.opml")
+	err = os.WriteFile(exportPath, data, 0644)
+	if err != nil {
+		return errMsg(err)
+	}
+
+	return exportMsg(fmt.Sprintf("Exported to %s", exportPath))
 }
 
 func (m Model) renderMarkdown(md string) string {
@@ -798,6 +902,8 @@ func (m Model) helpView() string {
 					"  alt+↑/↓ Move Feed",
 					"  alt+j/k Move Feed",
 					"  a       Add New Feed",
+					"  i       Import OPML",
+					"  e       Export OPML",
 					"  d       Delete Feed",
 					"  r       Refresh All",
 					"",
