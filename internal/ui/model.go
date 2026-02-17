@@ -493,16 +493,25 @@ func (m Model) View() string {
 
 	mainView := lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)
 
-	statusText := ""
-	if m.loading {
-		statusText = m.spinner.View() + " Loading..."
-	} else {
-		statusText = "Tab: switch panes | ?: help"
-	}
-
-	// Status Bar styling
+	// Status Bar: pill on left, status in middle, help hint on right
 	totalWidth := fw + ew + cw + 6
-	statusBar := StatusStyle.Width(totalWidth).Render(statusText)
+	pill := StatusPillStyle.Render("Lazy RSS")
+	pillWidth := lipgloss.Width(pill)
+
+	helpHint := StatusHelpStyle.Render("? help")
+	helpWidth := lipgloss.Width(helpHint)
+
+	midText := ""
+	if m.loading {
+		midText = m.spinner.View() + " Loading..."
+	}
+	midWidth := totalWidth - pillWidth - helpWidth
+	if midWidth < 0 {
+		midWidth = 0
+	}
+	mid := StatusTextStyle.Width(midWidth).Render(midText)
+
+	statusBar := lipgloss.JoinHorizontal(lipgloss.Top, pill, mid, helpHint)
 
 	return DocStyle.Render(lipgloss.JoinVertical(lipgloss.Left, mainView, statusBar))
 }

@@ -13,8 +13,19 @@ var (
 			Padding(0, 1)
 
 	StatusStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252"))
+
+	StatusPillStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("205")).
+			Padding(0, 1).
+			Bold(true)
+
+	StatusTextStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252")).
-			Background(lipgloss.Color("235")).
+			Padding(0, 1)
+
+	StatusHelpStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")).
 			Padding(0, 1)
 
 	ErrorStyle = lipgloss.NewStyle().
