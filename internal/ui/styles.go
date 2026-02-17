@@ -29,7 +29,6 @@ var (
 			BorderForeground(lipgloss.Color("240"))
 
 	UnreadItemStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("205")).
 			Bold(true)
 
 	DescriptionReadingStyle = lipgloss.NewStyle().
