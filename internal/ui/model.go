@@ -590,7 +590,7 @@ func (m Model) View() string {
 		title := runewidth.Truncate(i.entry.Title, cw-6, "...")
 		contentTitle = osc8Start + title + osc8End
 	}
-	contentHeader := TitleStyle.Copy().MaxHeight(1).Render(contentTitle)
+	contentHeader := TitleStyle.Copy().PaddingLeft(2).MaxHeight(1).Render(contentTitle)
 	contentView := contentStyle.Width(cw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, contentHeader, m.viewport.View()))
 
 	mainView := lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)
