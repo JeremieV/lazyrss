@@ -10,7 +10,7 @@ import (
 
 func FetchFeed(url string) (*gofeed.Feed, error) {
 	fp := gofeed.NewParser()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return fp.ParseURLWithContext(url, ctx)
 }

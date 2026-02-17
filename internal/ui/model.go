@@ -81,6 +81,13 @@ type Model struct {
 	height      int
 	currentFeed db.Feed
 	renderer    *glamour.TermRenderer
+	initialLoadDone bool
+	syncPending     int
+	// Stored pane dimensions for consistent rendering
+	paneHeight   int
+	feedsWidth   int
+	entriesWidth int
+	contentWidth int
 }
 
 func NewModel() Model {
@@ -169,6 +176,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// - 2 (Pane borders top+bottom)
 		// = msg.Height - 3 for pane inner content height
 		paneHeight := msg.Height - 3
+
+		// Store dimensions for consistent rendering
+		m.paneHeight = paneHeight
+		m.feedsWidth = feedsWidth
+		m.entriesWidth = entriesWidth
+		m.contentWidth = contentWidth
 
 		m.feedsList.SetSize(feedsWidth, paneHeight)
 		m.entriesList.SetSize(entriesWidth, paneHeight)
@@ -365,6 +378,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case backgroundSyncMsg:
+		m.syncPending = len(msg.feeds)
 		var cmds []tea.Cmd
 		for _, f := range msg.feeds {
 			cmds = append(cmds, m.syncFeed(f))
@@ -372,7 +386,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case feedSyncedMsg:
-		// When a feed is synced, we reload the feeds list to update unread counts
+		m.syncPending--
+		// Reload feeds list to update unread counts (but won't cascade into entries/content)
 		return m, m.loadFeeds
 
 	case feedsMsg:
@@ -381,8 +396,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.feedsList.Select(msg.index)
 		}
 		m.loading = false
-		// Load entries for the first feed automatically
-		if len(msg.items) > 0 {
+		// Only auto-load entries for the first feed on the very first load.
+		// Subsequent reloads (from background sync) just update the list silently.
+		if !m.initialLoadDone && len(msg.items) > 0 {
+			m.initialLoadDone = true
 			if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
 				m.currentFeed = i.feed
 				return m, m.loadEntries(i.feed)
@@ -464,19 +481,23 @@ func (m Model) View() string {
 		contentStyle = ActivePaneStyle.Copy()
 	}
 
-	// Force consistent height and width on all panes
-	h := m.feedsList.Height()
+	// Use stored pane dimensions, with fallbacks for the very first frame
+	h := m.paneHeight
 	if h <= 0 {
-		h = 10 // fallback for initial load
+		h = 20
 	}
-	
-	// Ensure widths are also set
-	fw := m.feedsList.Width()
-	if fw <= 0 { fw = 20 }
-	ew := m.entriesList.Width()
-	if ew <= 0 { ew = 25 }
-	cw := m.viewport.Width
-	if cw <= 0 { cw = 40 }
+	fw := m.feedsWidth
+	if fw <= 0 {
+		fw = 20
+	}
+	ew := m.entriesWidth
+	if ew <= 0 {
+		ew = 25
+	}
+	cw := m.contentWidth
+	if cw <= 0 {
+		cw = 40
+	}
 
 	feedsView := feedsStyle.Width(fw).Height(h).Render(m.feedsList.View())
 	entriesView := entriesStyle.Width(ew).Height(h).Render(m.entriesList.View())
@@ -504,6 +525,8 @@ func (m Model) View() string {
 	midText := ""
 	if m.loading {
 		midText = m.spinner.View() + " Loading..."
+	} else if m.syncPending > 0 {
+		midText = m.spinner.View() + " Syncing feeds..."
 	}
 	midWidth := totalWidth - pillWidth - helpWidth
 	if midWidth < 0 {
