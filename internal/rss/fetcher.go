@@ -1,7 +1,7 @@
 package rss
 
 import (
-	"lazyrss/internal/db"
+	"github.com/jeremiev/lazyrss/internal/db"
 	"context"
 	"time"
 

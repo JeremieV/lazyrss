@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"lazyrss/internal/db"
-	"lazyrss/internal/rss"
+	"github.com/jeremiev/lazyrss/internal/db"
+	"github.com/jeremiev/lazyrss/internal/rss"
 	"fmt"
 	"os"
 	"os/exec"

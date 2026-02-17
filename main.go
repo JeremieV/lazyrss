@@ -1,8 +1,8 @@
 package main
 
 import (
-	"lazyrss/internal/db"
-	"lazyrss/internal/ui"
+	"github.com/jeremiev/lazyrss/internal/db"
+	"github.com/jeremiev/lazyrss/internal/ui"
 	"fmt"
 	"os"
 
