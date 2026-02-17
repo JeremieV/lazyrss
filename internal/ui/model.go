@@ -77,7 +77,6 @@ type Model struct {
 	textInput     textinput.Model
 	spinner       spinner.Model
 	loading       bool
-	err         error
 	width       int
 	height      int
 	currentFeed db.Feed
@@ -415,7 +414,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 
 	case errMsg:
-		m.err = msg
+		// Display error in the content pane instead of crashing
+		m.viewport.SetContent(ErrorStyle.Render(fmt.Sprintf("Error: %v", msg)))
 		m.loading = false
 
 	case spinner.TickMsg:
@@ -441,10 +441,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	if m.err != nil {
-		return ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
-	}
-
 	if m.state == stateHelp {
 		return DocStyle.Render(m.helpView())
 	}
