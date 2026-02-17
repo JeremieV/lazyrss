@@ -22,6 +22,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
+	"github.com/mattn/go-runewidth"
 )
 
 
@@ -125,8 +126,7 @@ func NewModel() Model {
 	d.ShowDescription = false
 	d.SetHeight(1)
 	m.feedsList.SetDelegate(d)
-	m.feedsList.Title = "Feeds"
-	m.feedsList.SetShowTitle(true)
+	m.feedsList.SetShowTitle(false)
 	m.feedsList.SetShowStatusBar(false)
 	m.feedsList.SetShowPagination(true)
 	m.feedsList.SetShowHelp(false)
@@ -139,7 +139,7 @@ func NewModel() Model {
 	ed.ShowDescription = false
 	ed.SetHeight(1)
 	m.entriesList.SetDelegate(ed)
-	m.entriesList.SetShowTitle(true)
+	m.entriesList.SetShowTitle(false)
 	m.entriesList.SetShowStatusBar(false)
 	m.entriesList.SetShowPagination(true)
 	m.entriesList.SetShowHelp(false)
@@ -195,8 +195,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entriesWidth = entriesWidth
 		m.contentWidth = contentWidth
 
-		m.feedsList.SetSize(feedsWidth, paneHeight)
-		m.entriesList.SetSize(entriesWidth, paneHeight)
+		m.feedsList.SetSize(feedsWidth, paneHeight-1)
+		m.entriesList.SetSize(entriesWidth, paneHeight-1)
 		m.viewport.Width = contentWidth
 		// Viewport height needs to account for the custom header we render in the View function
 		m.viewport.Height = paneHeight - 1
@@ -443,12 +443,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = entryItem{entry: e, feedLastReadAt: msg.lastReadAt}
 		}
 		m.entriesList.SetItems(items)
-
-		// Make the Feed Title itself clickable using OSC 8 hyperlinks
-		osc8Start := "\x1b]8;;" + m.currentFeed.URL + "\x1b\\"
-		osc8End := "\x1b]8;;\x1b\\"
-		linkedTitle := osc8Start + m.currentFeed.Title + osc8End
-		m.entriesList.Title = linkedTitle
 		m.loading = false
 		// Load content for the first entry automatically
 		if len(items) > 0 {
@@ -542,17 +536,30 @@ func (m Model) View() string {
 		cw = 40
 	}
 
-	feedsView := feedsStyle.Width(fw).Height(h).Render(m.feedsList.View())
-	entriesView := entriesStyle.Width(ew).Height(h).Render(m.entriesList.View())
-	
+	feedsTitle := m.feedsList.Styles.Title.Copy().MarginLeft(2).Render("Feeds")
+	feedsView := feedsStyle.Width(fw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, feedsTitle, m.feedsList.View()))
+
+	var entriesTitle string
+	if m.currentFeed.ID != 0 {
+		osc8Start := "\x1b]8;;" + m.currentFeed.URL + "\x1b\\"
+		osc8End := "\x1b]8;;\x1b\\"
+		// Truncate the visible text to avoid overflow, then wrap in OSC 8
+		title := runewidth.Truncate(m.currentFeed.Title, ew-6, "...")
+		entriesTitle = m.entriesList.Styles.Title.Copy().MarginLeft(2).Render(osc8Start + title + osc8End)
+	} else {
+		entriesTitle = m.entriesList.Styles.Title.Copy().MarginLeft(2).Render("Articles")
+	}
+	entriesView := entriesStyle.Width(ew).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, entriesTitle, m.entriesList.View()))
+
 	var contentTitle string
 	if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
 		// Make the Article Title itself clickable
 		osc8Start := "\x1b]8;;" + i.entry.Link + "\x1b\\"
 		osc8End := "\x1b]8;;\x1b\\"
-		contentTitle = osc8Start + i.entry.Title + osc8End
+		title := runewidth.Truncate(i.entry.Title, cw-6, "...")
+		contentTitle = osc8Start + title + osc8End
 	}
-	contentHeader := TitleStyle.PaddingLeft(2).Width(cw).Render(contentTitle)
+	contentHeader := TitleStyle.Copy().MaxHeight(1).Render(contentTitle)
 	contentView := contentStyle.Width(cw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, contentHeader, m.viewport.View()))
 
 	mainView := lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)
