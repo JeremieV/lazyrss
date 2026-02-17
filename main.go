@@ -1,8 +1,8 @@
 package main
 
 import (
-	"clirss/internal/db"
-	"clirss/internal/ui"
+	"lazyrss/internal/db"
+	"lazyrss/internal/ui"
 	"fmt"
 	"os"
 

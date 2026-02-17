@@ -1,7 +1,7 @@
 package rss
 
 import (
-	"clirss/internal/db"
+	"lazyrss/internal/db"
 	"context"
 	"time"
 

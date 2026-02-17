@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"clirss/internal/db"
-	"clirss/internal/rss"
+	"lazyrss/internal/db"
+	"lazyrss/internal/rss"
 	"fmt"
 	"os"
 	"os/exec"

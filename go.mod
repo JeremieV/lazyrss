@@ -1,4 +1,4 @@
-module clirss
+module lazyrss
 
 go 1.25.7
 

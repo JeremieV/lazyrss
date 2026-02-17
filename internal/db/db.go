@@ -39,7 +39,7 @@ func InitDB() error {
 		return err
 	}
 
-	dbPath := filepath.Join(home, ".config", "clirss")
+	dbPath := filepath.Join(home, ".config", "lazyrss")
 	if err := os.MkdirAll(dbPath, 0755); err != nil {
 		return err
 	}
