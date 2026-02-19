@@ -112,6 +112,10 @@ func createTables() error {
 			FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_entries_feed_id ON entries(feed_id, published_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);`,
 	}
 
 	for _, query := range queries {
@@ -229,5 +233,38 @@ func GetEntries(feedID int64) ([]Entry, error) {
 func MarkAsRead(entryID int64) error {
 	_, err := database.Exec("UPDATE entries SET read = 1 WHERE id = ?", entryID)
 	return err
+}
+
+func GetSetting(key string, defaultValue string) (string, error) {
+	var value string
+	err := database.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return defaultValue, nil
+	}
+	if err != nil {
+		return defaultValue, err
+	}
+	return value, nil
+}
+
+func SetSetting(key, value string) error {
+	_, err := database.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", key, value)
+	return err
+}
+
+func GetShowArticleView() (bool, error) {
+	value, err := GetSetting("show_article_view", "true")
+	if err != nil {
+		return true, err
+	}
+	return value == "true", nil
+}
+
+func SetShowArticleView(show bool) error {
+	value := "false"
+	if show {
+		value = "true"
+	}
+	return SetSetting("show_article_view", value)
 }
 

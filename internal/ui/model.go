@@ -92,6 +92,7 @@ type Model struct {
 	syncPending     int
 	statusMsg       string
 	showFeedInfo    bool
+	showArticleView bool
 	// Stored pane dimensions for consistent rendering
 	paneHeight   int
 	feedsWidth   int
@@ -113,15 +114,16 @@ func NewModel() Model {
 	fp.CurrentDirectory, _ = os.UserHomeDir()
 
 	m := Model{
-		state:       stateMain,
-		activePane:  paneFeeds,
-		feedsList:   list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
-		entriesList: list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
-		viewport:    viewport.New(0, 0),
-		textInput:   ti,
-		filePicker:  fp,
-		spinner:     s,
-		loading:     true, // Set to true initially so the user sees the spinner immediately
+		state:          stateMain,
+		activePane:     paneFeeds,
+		showArticleView: true,
+		feedsList:      list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
+		entriesList:    list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
+		viewport:       viewport.New(0, 0),
+		textInput:      ti,
+		filePicker:     fp,
+		spinner:        s,
+		loading:        true, // Set to true initially so the user sees the spinner immediately
 	}
 	d := list.NewDefaultDelegate()
 	d.ShowDescription = false
@@ -152,9 +154,57 @@ func NewModel() Model {
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.loadFeeds,
+		m.loadShowArticleView,
 		m.spinner.Tick,
 		m.startBackgroundSync,
 	)
+}
+
+func (m *Model) recalcPaneDimensions() {
+	w, h := m.width, m.height
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
+
+	// Feeds pane: fixed proportion, never expands when article view is off
+	feedsWidth := int(float64(w) * 0.2)
+	if feedsWidth < 20 {
+		feedsWidth = 20
+	}
+
+	var entriesWidth, contentWidth int
+	if m.showArticleView {
+		entriesWidth = int(float64(w) * 0.25)
+		if entriesWidth < 25 {
+			entriesWidth = 25
+		}
+		contentWidth = w - feedsWidth - entriesWidth - 10
+		if contentWidth < 30 {
+			contentWidth = 30
+		}
+	} else {
+		// Article view off: entries list expands to take content's place
+		entriesWidth = w - feedsWidth - 6
+		if entriesWidth < 25 {
+			entriesWidth = 25
+		}
+		contentWidth = 0
+	}
+
+	paneHeight := h - 3
+
+	m.paneHeight = paneHeight
+	m.feedsWidth = feedsWidth
+	m.entriesWidth = entriesWidth
+	m.contentWidth = contentWidth
+
+	m.feedsList.SetSize(feedsWidth, paneHeight-1)
+	m.entriesList.SetSize(entriesWidth, paneHeight-1)
+	m.viewport.Width = contentWidth
+	m.viewport.Height = paneHeight - 1
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -165,50 +215,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
-		// Calculate pane widths (3 panes)
-		feedsWidth := int(float64(msg.Width) * 0.2)
-		if feedsWidth < 20 {
-			feedsWidth = 20
-		}
-		entriesWidth := int(float64(msg.Width) * 0.25)
-		if entriesWidth < 25 {
-			entriesWidth = 25
-		}
-		// Total width = feedsWidth + entriesWidth + contentWidth + borders/padding
-		// DocStyle margin: 2 left, 2 right = 4
-		// Pane borders: 3 panes * 2 = 6
-		contentWidth := msg.Width - feedsWidth - entriesWidth - 10
-		if contentWidth < 30 {
-			contentWidth = 30
-		}
-
-		// Height calculation:
-		// msg.Height
-		// - 1 (Status bar)
-		// - 2 (Pane borders top+bottom)
-		// = msg.Height - 3 for pane inner content height
-		paneHeight := msg.Height - 3
-
-		// Store dimensions for consistent rendering
-		m.paneHeight = paneHeight
-		m.feedsWidth = feedsWidth
-		m.entriesWidth = entriesWidth
-		m.contentWidth = contentWidth
-
-		m.feedsList.SetSize(feedsWidth, paneHeight-1)
-		m.entriesList.SetSize(entriesWidth, paneHeight-1)
-		m.viewport.Width = contentWidth
-		// Viewport height needs to account for the custom header we render in the View function
-		m.viewport.Height = paneHeight - 1
+		m.recalcPaneDimensions()
 		m.textInput.Width = msg.Width - 10
 		m.filePicker.Height = msg.Height - 5
 
 		// Update renderer
 		if m.renderer == nil || m.width != msg.Width {
+			cw := m.contentWidth
+			if cw < 30 {
+				cw = 30
+			}
 			r, _ := glamour.NewTermRenderer(
 				glamour.WithStylePath("dark"),
-				glamour.WithWordWrap(contentWidth-4),
+				glamour.WithWordWrap(cw-4),
 				glamour.WithEmoji(),
 			)
 			m.renderer = r
@@ -244,10 +263,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "tab", "right":
-				m.activePane = (m.activePane + 1) % 3
+				numPanes := 3
+				if !m.showArticleView {
+					numPanes = 2
+				}
+				m.activePane = state((int(m.activePane) + 1) % numPanes)
 				return m, nil
 			case "shift+tab", "left":
-				m.activePane = (m.activePane - 1 + 3) % 3
+				numPanes := 3
+				if !m.showArticleView {
+					numPanes = 2
+				}
+				m.activePane = state((int(m.activePane) - 1 + numPanes) % numPanes)
 				return m, nil
 			case "a":
 				m.state = stateAddingFeed
@@ -261,6 +288,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "v":
 				m.showFeedInfo = !m.showFeedInfo
 				return m, nil
+			case "t":
+				m.showArticleView = !m.showArticleView
+				if !m.showArticleView && m.activePane == paneContent {
+					m.activePane = paneEntries
+				}
+				m.recalcPaneDimensions()
+				return m, m.saveShowArticleView(m.showArticleView)
 			case "r":
 				return m, m.refreshAllFeeds()
 			}
@@ -378,7 +412,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if msg.X < m.feedsList.Width() {
 					m.feedsList, cmd = m.feedsList.Update(msg)
 					return m, cmd
-				} else if msg.X < m.feedsList.Width()+m.entriesList.Width()+2 {
+				} else if !m.showArticleView || msg.X < m.feedsList.Width()+m.entriesList.Width()+2 {
 					m.entriesList, cmd = m.entriesList.Update(msg)
 					return m, cmd
 				} else {
@@ -398,7 +432,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(cmd, m.loadEntries(i.feed))
 				}
 				return m, cmd
-			} else if msg.X < m.feedsList.Width()+m.entriesList.Width()+2 {
+			} else if !m.showArticleView || msg.X < m.feedsList.Width()+m.entriesList.Width()+2 {
 				m.activePane = paneEntries
 				m.entriesList, cmd = m.entriesList.Update(msg)
 				if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
@@ -458,6 +492,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case contentMsg:
 		m.viewport.SetContent(string(msg))
 		m.loading = false
+
+	case showArticleViewMsg:
+		m.showArticleView = bool(msg)
+		m.recalcPaneDimensions()
+		if !m.showArticleView && m.activePane == paneContent {
+			m.activePane = paneEntries
+		}
 
 	case exportMsg:
 		m.statusMsg = string(msg)
@@ -582,21 +623,28 @@ func (m Model) View() string {
 		entriesView = entriesStyle.Width(ew).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, entriesTitle, m.entriesList.View()))
 	}
 
-	var contentTitle string
-	if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
-		// Make the Article Title itself clickable
-		osc8Start := "\x1b]8;;" + i.entry.Link + "\x1b\\"
-		osc8End := "\x1b]8;;\x1b\\"
-		title := runewidth.Truncate(i.entry.Title, cw-6, "...")
-		contentTitle = osc8Start + title + osc8End
+	var mainView string
+	if m.showArticleView {
+		var contentTitle string
+		if i, ok := m.entriesList.SelectedItem().(entryItem); ok {
+			// Make the Article Title itself clickable
+			osc8Start := "\x1b]8;;" + i.entry.Link + "\x1b\\"
+			osc8End := "\x1b]8;;\x1b\\"
+			title := runewidth.Truncate(i.entry.Title, cw-6, "...")
+			contentTitle = osc8Start + title + osc8End
+		}
+		contentHeader := TitleStyle.Copy().PaddingLeft(2).MaxHeight(1).Render(contentTitle)
+		contentView := contentStyle.Width(cw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, contentHeader, m.viewport.View()))
+		mainView = lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)
+	} else {
+		mainView = lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView)
 	}
-	contentHeader := TitleStyle.Copy().PaddingLeft(2).MaxHeight(1).Render(contentTitle)
-	contentView := contentStyle.Width(cw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, contentHeader, m.viewport.View()))
-
-	mainView := lipgloss.JoinHorizontal(lipgloss.Top, feedsView, entriesView, contentView)
 
 	// Status Bar: pill on left, status in middle, help hint on right
-	totalWidth := fw + ew + cw + 6
+	totalWidth := fw + ew + 4
+	if m.showArticleView {
+		totalWidth = fw + ew + cw + 6
+	}
 	pill := StatusPillStyle.Render("Lazy RSS")
 	pillWidth := lipgloss.Width(pill)
 
@@ -639,6 +687,7 @@ type entriesMsg struct {
 }
 type contentMsg string
 type exportMsg string
+type showArticleViewMsg bool
 
 func (m Model) loadFeeds() tea.Msg {
 	feeds, err := db.GetFeeds()
@@ -759,6 +808,24 @@ func (m Model) importOPML(path string) tea.Cmd {
 		}
 
 		return m.loadFeeds()
+	}
+}
+
+func (m Model) loadShowArticleView() tea.Msg {
+	show, err := db.GetShowArticleView()
+	if err != nil {
+		return errMsg(err)
+	}
+	return showArticleViewMsg(show)
+}
+
+func (m Model) saveShowArticleView(show bool) tea.Cmd {
+	return func() tea.Msg {
+		err := db.SetShowArticleView(show)
+		if err != nil {
+			return errMsg(err)
+		}
+		return nil
 	}
 }
 
@@ -920,20 +987,21 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 func (m Model) helpView() string {
 	return TitleStyle.Render("Keyboard Shortcuts") + "\n\n" +
 		lipgloss.JoinHorizontal(lipgloss.Top,
-			lipgloss.NewStyle().Width(30).Render(
-				lipgloss.JoinVertical(lipgloss.Left,
-					"General",
-					"  ?       Show/Hide Help",
-					"  q       Quit",
-					"  Tab/→   Next Pane",
-					"  S-Tab/← Prev Pane",
-					"  Enter   Open in Browser",
-					"",
-					"Navigation",
-					"  ↑/↓     Move Cursor",
-					"  Esc     Go Back",
+				lipgloss.NewStyle().Width(30).Render(
+					lipgloss.JoinVertical(lipgloss.Left,
+						"General",
+						"  ?       Show/Hide Help",
+						"  q       Quit",
+						"  Tab/→   Next Pane",
+						"  S-Tab/← Prev Pane",
+						"  Enter   Open in Browser",
+						"  t       Toggle Article View",
+						"",
+						"Navigation",
+						"  ↑/↓     Move Cursor",
+						"  Esc     Go Back",
+					),
 				),
-			),
 			lipgloss.NewStyle().Width(30).Render(
 				lipgloss.JoinVertical(lipgloss.Left,
 					"Feeds View",
