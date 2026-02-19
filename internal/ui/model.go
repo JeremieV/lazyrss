@@ -44,6 +44,15 @@ const (
 
 type errMsg error
 
+// noSpacingDelegate wraps a list.Delegate and sets spacing to 0
+type noSpacingDelegate struct {
+	list.DefaultDelegate
+}
+
+func (d noSpacingDelegate) Spacing() int {
+	return 0
+}
+
 type feedItem struct {
 	feed db.Feed
 }
@@ -125,7 +134,7 @@ func NewModel() Model {
 		spinner:        s,
 		loading:        true, // Set to true initially so the user sees the spinner immediately
 	}
-	d := list.NewDefaultDelegate()
+	d := noSpacingDelegate{DefaultDelegate: list.NewDefaultDelegate()}
 	d.ShowDescription = false
 	d.SetHeight(1)
 	m.feedsList.SetDelegate(d)
@@ -138,7 +147,7 @@ func NewModel() Model {
 			key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		}
 	}
-	ed := list.NewDefaultDelegate()
+	ed := noSpacingDelegate{DefaultDelegate: list.NewDefaultDelegate()}
 	ed.ShowDescription = false
 	ed.SetHeight(1)
 	m.entriesList.SetDelegate(ed)
@@ -201,8 +210,10 @@ func (m *Model) recalcPaneDimensions() {
 	m.entriesWidth = entriesWidth
 	m.contentWidth = contentWidth
 
-	m.feedsList.SetSize(feedsWidth, paneHeight-1)
-	m.entriesList.SetSize(entriesWidth, paneHeight-1)
+	// When using noSpacingDelegate (Spacing()=0), the bubbles list adds MarginTop(1) to
+	// pagination, making the list output 1 line taller. Reduce both list heights by 1 to compensate.
+	m.feedsList.SetSize(feedsWidth, paneHeight-2)
+	m.entriesList.SetSize(entriesWidth, paneHeight-2)
 	m.viewport.Width = contentWidth
 	m.viewport.Height = paneHeight - 1
 }
@@ -582,7 +593,9 @@ func (m Model) View() string {
 	}
 
 	feedsTitle := m.feedsList.Styles.Title.Copy().MarginLeft(2).Render("Feeds")
-	feedsView := feedsStyle.Width(fw).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, feedsTitle, m.feedsList.View()))
+	feedsListStr := m.feedsList.View()
+	feedsContent := lipgloss.JoinVertical(lipgloss.Left, feedsTitle, feedsListStr)
+	feedsView := feedsStyle.Width(fw).Height(h).Render(feedsContent)
 
 	var entriesTitle string
 	if m.currentFeed.ID != 0 {
