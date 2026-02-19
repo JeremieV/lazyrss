@@ -268,3 +268,19 @@ func SetShowArticleView(show bool) error {
 	return SetSetting("show_article_view", value)
 }
 
+func GetShowEntryDates() (bool, error) {
+	value, err := GetSetting("show_entry_dates", "false")
+	if err != nil {
+		return false, err
+	}
+	return value == "true", nil
+}
+
+func SetShowEntryDates(show bool) error {
+	value := "false"
+	if show {
+		value = "true"
+	}
+	return SetSetting("show_entry_dates", value)
+}
+

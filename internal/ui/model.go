@@ -69,6 +69,7 @@ func (i feedItem) FilterValue() string { return i.feed.Title }
 type entryItem struct {
 	entry          db.Entry
 	feedLastReadAt time.Time
+	showDates      bool
 }
 
 func (i entryItem) Title() string {
@@ -76,6 +77,27 @@ func (i entryItem) Title() string {
 	if i.entry.PublishedAt.After(i.feedLastReadAt) {
 		title = UnreadItemStyle.Render(i.entry.Title)
 	}
+	
+	// Add date prefix if enabled
+	if i.showDates && !i.entry.PublishedAt.IsZero() {
+		var dateStr string
+		now := time.Now()
+		if i.entry.PublishedAt.Year() == now.Year() {
+			// Same year: "19 Feb" or " 9 Feb" (space before day if < 10)
+			// Use " 2" format to pad single-digit days with a space
+			dateStr = i.entry.PublishedAt.Format("2 Jan")
+			if i.entry.PublishedAt.Day() < 10 {
+				dateStr = " " + dateStr
+			}
+		} else {
+			// Different year: "  2025" (extra space before year)
+			dateStr = "  " + i.entry.PublishedAt.Format("2006")
+		}
+		// Style the date with a dimmer color
+		styledDate := DateStyle.Render(dateStr)
+		title = styledDate + " " + title
+	}
+	
 	// Wrap the title text in an OSC 8 hyperlink
 	return "\x1b]8;;" + i.entry.Link + "\x1b\\" + title + "\x1b]8;;\x1b\\"
 }
@@ -102,6 +124,7 @@ type Model struct {
 	statusMsg       string
 	showFeedInfo    bool
 	showArticleView bool
+	showEntryDates  bool
 	// Stored pane dimensions for consistent rendering
 	paneHeight   int
 	feedsWidth   int
@@ -164,6 +187,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.loadFeeds,
 		m.loadShowArticleView,
+		m.loadShowEntryDates,
 		m.spinner.Tick,
 		m.startBackgroundSync,
 	)
@@ -327,6 +351,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.recalcPaneDimensions()
 				return m, m.saveShowArticleView(m.showArticleView)
+			case "d":
+				m.showEntryDates = !m.showEntryDates
+				// Refresh entries list to update titles with dates
+				if m.currentFeed.ID != 0 {
+					return m, tea.Batch(m.loadEntries(m.currentFeed), m.saveShowEntryDates(m.showEntryDates))
+				}
+				return m, m.saveShowEntryDates(m.showEntryDates)
 			case "r":
 				return m, m.refreshAllFeeds()
 			}
@@ -371,7 +402,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						db.SwapFeedPositions(int(itemA.feed.ID), posA, int(itemB.feed.ID), posB)
 						return m, m.loadFeedsWithIndex(idx + 1)
 					}
-				case "d":
+				case "D":
 					if i, ok := m.feedsList.SelectedItem().(feedItem); ok {
 						return m, m.deleteFeed(i.feed.ID)
 					}
@@ -508,7 +539,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case entriesMsg:
 		items := make([]list.Item, len(msg.entries))
 		for i, e := range msg.entries {
-			items[i] = entryItem{entry: e, feedLastReadAt: msg.lastReadAt}
+			items[i] = entryItem{entry: e, feedLastReadAt: msg.lastReadAt, showDates: m.showEntryDates}
 		}
 		m.entriesList.SetItems(items)
 		m.loading = false
@@ -529,6 +560,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.showArticleView && m.activePane == paneContent {
 			m.activePane = paneEntries
 		}
+		return m, nil
+	case showEntryDatesMsg:
+		m.showEntryDates = bool(msg)
+		// Refresh entries list to update titles with dates
+		if m.currentFeed.ID != 0 {
+			return m, m.loadEntries(m.currentFeed)
+		}
+		return m, nil
 
 	case exportMsg:
 		m.statusMsg = string(msg)
@@ -725,6 +764,7 @@ type entriesMsg struct {
 type contentMsg string
 type exportMsg string
 type showArticleViewMsg bool
+type showEntryDatesMsg bool
 
 func (m Model) loadFeeds() tea.Msg {
 	feeds, err := db.GetFeeds()
@@ -859,6 +899,24 @@ func (m Model) loadShowArticleView() tea.Msg {
 func (m Model) saveShowArticleView(show bool) tea.Cmd {
 	return func() tea.Msg {
 		err := db.SetShowArticleView(show)
+		if err != nil {
+			return errMsg(err)
+		}
+		return nil
+	}
+}
+
+func (m Model) loadShowEntryDates() tea.Msg {
+	show, err := db.GetShowEntryDates()
+	if err != nil {
+		return errMsg(err)
+	}
+	return showEntryDatesMsg(show)
+}
+
+func (m Model) saveShowEntryDates(show bool) tea.Cmd {
+	return func() tea.Msg {
+		err := db.SetShowEntryDates(show)
 		if err != nil {
 			return errMsg(err)
 		}
@@ -1033,6 +1091,7 @@ func (m Model) helpView() string {
 					"  S-Tab / ← Previous Pane",
 					"  Enter     Open Article in Browser",
 					"  t         Toggle Article View",
+					"  d         Toggle Entry Dates",
 					"  Esc       Cancel / Go Back",
 					"",
 					"Navigation",
@@ -1044,7 +1103,7 @@ func (m Model) helpView() string {
 				lipgloss.JoinVertical(lipgloss.Left,
 					"Feeds Pane",
 					"  a         Add New Feed",
-					"  d         Delete Feed",
+					"  D         Delete Feed",
 					"  v         Toggle Feed Info",
 					"  r         Refresh All Feeds",
 					"  alt+↑ / alt+k  Move Feed Up",

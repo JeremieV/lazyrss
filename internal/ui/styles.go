@@ -57,5 +57,8 @@ var (
 	InactivePaneStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), true).
 			BorderForeground(lipgloss.Color("240"))
+
+	DateStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241"))
 )
 
