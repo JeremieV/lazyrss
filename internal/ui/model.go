@@ -178,27 +178,48 @@ func (m *Model) recalcPaneDimensions() {
 		h = 24
 	}
 
-	// Feeds pane: fixed proportion, never expands when article view is off
-	feedsWidth := int(float64(w) * 0.2)
-	if feedsWidth < 20 {
-		feedsWidth = 20
-	}
-
-	var entriesWidth, contentWidth int
+	// Account for borders: each bordered pane's Width() includes 2 border chars (left + right)
+	// When joined horizontally with lipgloss.JoinHorizontal, borders DO NOT overlap.
+	// The total width is the sum of all pane widths (each includes its borders).
+	// For 3 panes: fw + ew + cw = w (where each includes 2 border chars)
+	// For 2 panes: fw + ew = w (where each includes 2 border chars)
+	// So we need to subtract border chars from the window width for content calculations.
+	
+	var feedsWidth, entriesWidth, contentWidth int
 	if m.showArticleView {
-		entriesWidth = int(float64(w) * 0.25)
+		// 3 panes: each has 2 border chars, total 6 border chars
+		// Total content space = w - 6 (all borders)
+		availableWidth := w - 6
+		feedsWidth = int(float64(availableWidth) * 0.2)
+		if feedsWidth < 20 {
+			feedsWidth = 20
+		}
+		entriesWidth = int(float64(availableWidth) * 0.25)
 		if entriesWidth < 25 {
 			entriesWidth = 25
 		}
-		contentWidth = w - feedsWidth - entriesWidth - 10
+		contentWidth = availableWidth - feedsWidth - entriesWidth
 		if contentWidth < 30 {
 			contentWidth = 30
+			// Adjust other panes if needed
+			remaining := availableWidth - contentWidth
+			if feedsWidth + entriesWidth > remaining {
+				feedsWidth = int(float64(remaining) * 0.2)
+				entriesWidth = remaining - feedsWidth
+			}
 		}
 	} else {
-		// Article view off: entries list expands to take content's place
-		entriesWidth = w - feedsWidth - 6
+		// 2 panes: each has 2 border chars, total 4 border chars
+		// Total content space = w - 4 (all borders)
+		availableWidth := w - 4
+		feedsWidth = int(float64(availableWidth) * 0.2)
+		if feedsWidth < 20 {
+			feedsWidth = 20
+		}
+		entriesWidth = availableWidth - feedsWidth
 		if entriesWidth < 25 {
 			entriesWidth = 25
+			feedsWidth = availableWidth - entriesWidth
 		}
 		contentWidth = 0
 	}
@@ -412,9 +433,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		// Adjust for DocStyle padding (1 top, 2 left)
-		msg.X -= 2
-		msg.Y -= 1
+		// No DocStyle padding, so no adjustment needed
 
 		// Handle Scrolling
 		if msg.Action == tea.MouseActionPress {
@@ -654,9 +673,12 @@ func (m Model) View() string {
 	}
 
 	// Status Bar: pill on left, status in middle, help hint on right
-	totalWidth := fw + ew + 4
+	// Width should match the mainView width
+	// Borders don't overlap, so total = sum of all pane widths
+	// Each pane width already includes its borders (Width() adds 2 chars)
+	totalWidth := fw + ew
 	if m.showArticleView {
-		totalWidth = fw + ew + cw + 6
+		totalWidth = fw + ew + cw
 	}
 	pill := StatusPillStyle.Render("Lazy RSS")
 	pillWidth := lipgloss.Width(pill)
@@ -679,8 +701,10 @@ func (m Model) View() string {
 	mid := StatusTextStyle.Width(midWidth).Render(midText)
 
 	statusBar := lipgloss.JoinHorizontal(lipgloss.Top, pill, mid, helpHint)
+	fullContent := lipgloss.JoinVertical(lipgloss.Left, mainView, statusBar)
 
-	return DocStyle.Render(lipgloss.JoinVertical(lipgloss.Left, mainView, statusBar))
+	// No horizontal padding - use full width
+	return fullContent
 }
 
 // Commands
@@ -1000,41 +1024,53 @@ func (m Model) viewEntry(e db.Entry) tea.Cmd {
 func (m Model) helpView() string {
 	return TitleStyle.Render("Keyboard Shortcuts") + "\n\n" +
 		lipgloss.JoinHorizontal(lipgloss.Top,
-				lipgloss.NewStyle().Width(30).Render(
-					lipgloss.JoinVertical(lipgloss.Left,
-						"General",
-						"  ?       Show/Hide Help",
-						"  q       Quit",
-						"  Tab/→   Next Pane",
-						"  S-Tab/← Prev Pane",
-						"  Enter   Open in Browser",
-						"  t       Toggle Article View",
-						"",
-						"Navigation",
-						"  ↑/↓     Move Cursor",
-						"  Esc     Go Back",
-					),
-				),
-			lipgloss.NewStyle().Width(30).Render(
+			lipgloss.NewStyle().Width(32).Render(
 				lipgloss.JoinVertical(lipgloss.Left,
-					"Feeds View",
-					"  alt+↑/↓ Move Feed",
-					"  alt+j/k Move Feed",
-					"  a       Add New Feed",
-					"  i       Import OPML",
-					"  e       Export OPML",
-					"  v       Toggle Feed Info",
-					"  d       Delete Feed",
-					"  r       Refresh All",
+					"General",
+					"  ?         Show/Hide Help",
+					"  q         Quit",
+					"  Tab / →  Next Pane",
+					"  S-Tab / ← Previous Pane",
+					"  Enter     Open Article in Browser",
+					"  t         Toggle Article View",
+					"  Esc       Cancel / Go Back",
 					"",
-					"Articles View",
-					"  r       Refresh Current Feed",
+					"Navigation",
+					"  ↑ / ↓     Move Cursor",
+					"  j / k     Move Cursor (vim)",
 				),
 			),
-			lipgloss.NewStyle().Width(30).Render(
+			lipgloss.NewStyle().Width(32).Render(
 				lipgloss.JoinVertical(lipgloss.Left,
+					"Feeds Pane",
+					"  a         Add New Feed",
+					"  d         Delete Feed",
+					"  v         Toggle Feed Info",
+					"  r         Refresh All Feeds",
+					"  alt+↑ / alt+k  Move Feed Up",
+					"  alt+↓ / alt+j  Move Feed Down",
+					"  /         Filter Feeds",
+					"",
+					"Articles Pane",
+					"  r         Refresh Current Feed",
+					"  /         Filter Articles",
+				),
+			),
+			lipgloss.NewStyle().Width(32).Render(
+				lipgloss.JoinVertical(lipgloss.Left,
+					"Import/Export",
+					"  i         Import OPML",
+					"  e         Export OPML",
+					"",
+					"Article View",
+					"  ↑ / ↓     Scroll Up/Down",
+					"  Page Up   Scroll Page Up",
+					"  Page Down Scroll Page Down",
+					"  Home      Scroll to Top",
+					"  End       Scroll to Bottom",
+					"",
 					"Symbols",
-					"  Pink Text   Unread (New items)",
+					"  Pink Text Unread Items",
 				),
 			),
 		) + "\n\n(press any key to return)"
